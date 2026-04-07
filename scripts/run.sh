@@ -45,6 +45,9 @@ module load PyTorch/2.7.1-foss-2024a-CUDA-12.6.0 2>/dev/null || true
 # Install missing deps into user site
 pip install --user scikit-learn datasets pandas 2>/dev/null || true
 
+# Unbuffered Python output for real-time log monitoring
+export PYTHONUNBUFFERED=1
+
 # GPU diagnostics
 python -c "
 import torch
