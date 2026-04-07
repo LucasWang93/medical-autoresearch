@@ -1,6 +1,66 @@
+# Experiment logs (contain server paths, not data)
 results/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
 *.egg-info/
 run.log
+
+# ============================================================
+# MIMIC / Clinical Data — NEVER commit these
+# ============================================================
+
+# Raw MIMIC tables
+ADMISSIONS.csv*
+PATIENTS.csv*
+DIAGNOSES_ICD.csv*
+PROCEDURES_ICD.csv*
+PRESCRIPTIONS.csv*
+LABEVENTS.csv*
+NOTEEVENTS.csv*
+ICUSTAYS.csv*
+CHARTEVENTS.csv*
+TRANSFERS.csv*
+DRGCODES.csv*
+CPTEVENTS.csv*
+MICROBIOLOGYEVENTS.csv*
+INPUTEVENTS*.csv*
+OUTPUTEVENTS.csv*
+CAREGIVERS.csv*
+SERVICES.csv*
+CALLOUT.csv*
+DATETIMEEVENTS.csv*
+PROCEDUREEVENTS*.csv*
+D_ICD_*.csv*
+D_ITEMS.csv*
+D_LABITEMS.csv*
+
+# Processed / serialized data
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.feather
+*.parquet
+*.pt
+*.pth
+*.sql
+*.sql.gz
+*.db
+
+# Data directories
+data/
+mimic*/
+physionet*/
+.cache/
+pyhealth_cache/
+
+# Large files
+*.tar.gz
+*.zip
+*.tar
