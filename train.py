@@ -375,7 +375,7 @@ def shape_reward(
 # Training Loop
 # ============================================================
 
-def parse_args():
+def parse_args(argv: Optional[List[str]] = None):
     parser = argparse.ArgumentParser(description="Medical AutoResearch — RL training")
     parser.add_argument("--task", type=str, default=None,
                         help="Override TASK_NAME (e.g. mortality_prediction)")
@@ -389,15 +389,15 @@ def parse_args():
                         help="Use real data via PyHealth (requires MIMIC)")
     parser.add_argument("--data-root", type=str, default=None,
                         help="MIMIC data root (for --use-pyhealth)")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main():
-    args = parse_args()
+def main(argv: Optional[List[str]] = None):
+    args = parse_args(argv)
 
     task_name = args.task or TASK_NAME
-    time_budget = args.time_budget or TIME_BUDGET_SECONDS
-    batch_size = args.batch_size or BATCH_SIZE
+    time_budget = TIME_BUDGET_SECONDS if args.time_budget is None else args.time_budget
+    batch_size = BATCH_SIZE if args.batch_size is None else args.batch_size
 
     set_seed(SEED)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -405,16 +405,15 @@ def main():
         torch.cuda.reset_peak_memory_stats()
 
     # ---- Load task & data ----
-    task_spec = TaskRegistry.get(task_name)
-    print(f"[train] Task: {task_spec.name} ({task_spec.task_type})")
-    print(f"[train] Primary metric: {task_spec.primary_metric} ({task_spec.metric_direction})")
-    print(f"[train] Device: {device}")
-
-    train_loader, val_loader, test_loader = load_task_data(
+    task_spec, train_loader, val_loader, test_loader = load_task_data(
         task_name, batch_size=batch_size,
         use_pyhealth=args.use_pyhealth, data_root=args.data_root,
         n_synthetic_patients=args.n_patients,
+        return_spec=True,
     )
+    print(f"[train] Task: {task_spec.name} ({task_spec.task_type})")
+    print(f"[train] Primary metric: {task_spec.primary_metric} ({task_spec.metric_direction})")
+    print(f"[train] Device: {device}")
     print(f"[train] Data: {len(train_loader.dataset)} train, "
           f"{len(val_loader.dataset)} val, {len(test_loader.dataset)} test")
 

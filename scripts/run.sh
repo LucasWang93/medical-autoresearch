@@ -22,7 +22,8 @@
 
 set -euo pipefail
 
-BASEDIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Use hardcoded BASEDIR since Slurm may change $0
+BASEDIR="/nfs/roberts/project/pi_yz875/sw2572/codes/auto-research-health/medical-autoresearch"
 cd "${BASEDIR}"
 
 echo "=========================================="
@@ -33,11 +34,16 @@ echo "Node:      $(hostname)"
 echo "Partition: ${SLURM_JOB_PARTITION:-local}"
 echo "GPU:       ${CUDA_VISIBLE_DEVICES:-none}"
 echo "Time:      $(date)"
-echo "Dir:       ${BASEDIR}"
+echo "Dir:       $(pwd)"
 echo "=========================================="
 
-# Activate environment
-module load Python/3.12.3-GCCcore-13.3.0 2>/dev/null || true
+# Load system modules (PyTorch with matching CUDA)
+module purge 2>/dev/null || true
+module load StdEnv 2>/dev/null || true
+module load PyTorch/2.7.1-foss-2024a-CUDA-12.6.0 2>/dev/null || true
+
+# Install missing deps into user site
+pip install --user scikit-learn 2>/dev/null || true
 
 # GPU diagnostics
 python -c "
@@ -46,7 +52,11 @@ print(f'PyTorch {torch.__version__}')
 print(f'CUDA available: {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     print(f'GPU: {torch.cuda.get_device_name(0)}')
-    print(f'VRAM: {torch.cuda.get_device_properties(0).total_mem / 1024**3:.1f} GB')
+    props = torch.cuda.get_device_properties(0)
+    vram = getattr(props, 'total_memory', getattr(props, 'total_mem', 0))
+    print(f'VRAM: {vram / 1024**3:.1f} GB')
+else:
+    print('WARNING: No CUDA — training on CPU (will be slow)')
 "
 
 echo "=========================================="

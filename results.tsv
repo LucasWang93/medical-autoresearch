@@ -1,0 +1,2 @@
+commit	job_id	primary_metric	reward	memory_gb	status	task	description
+baseline	7439080	0.654256	0.000000	0.0	keep	drug_recommendation	baseline REINFORCE, 60s budget, 2000 patients

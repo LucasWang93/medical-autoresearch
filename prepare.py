@@ -16,7 +16,7 @@ import os
 import random
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -260,7 +260,7 @@ TaskRegistry.register(TaskSpec(
     primary_metric="jaccard_samples",
     metric_direction="max",
     metrics=["jaccard_samples", "f1_samples", "pr_auc_samples"],
-    reward_components={"jaccard": 1.0, "ddi_penalty": -0.5},
+    reward_components={"jaccard_samples": 1.0, "ddi_rate": -0.5},
     n_archetypes=10,
     max_visits=15,
     max_codes_per_visit=12,
@@ -320,7 +320,7 @@ TaskRegistry.register(TaskSpec(
         "RL angle: sequential feature selection for triage."
     ),
     feature_keys=["conditions", "procedures"],
-    label_key="los_category",
+    label_key="los",
     feature_dims={"conditions": 500, "procedures": 200},
     label_dim=3,
     primary_metric="f1_macro",
@@ -504,6 +504,19 @@ class SyntheticEHRDataset(Dataset):
         return self.samples[idx]
 
 
+class InMemoryEHRDataset(Dataset):
+    """Simple in-memory dataset used after normalizing PyHealth samples."""
+
+    def __init__(self, samples: List[Dict[str, Any]]):
+        self.samples = samples
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        return self.samples[idx]
+
+
 def _pad_nested_sequence(
     batch_seqs: List[List[List[int]]],
     vocab_size: int,
@@ -587,6 +600,176 @@ def collate_fn_factory(task_spec: TaskSpec):
     return collate
 
 
+def _ensure_list(value: Any) -> List[Any]:
+    """Normalize arbitrary sample values to a Python list."""
+    if value is None:
+        return []
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if torch.is_tensor(value):
+        return value.detach().cpu().tolist()
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def _ensure_nested_sequence(value: Any) -> List[List[Any]]:
+    """Normalize flat or nested visit representations to visit-major format."""
+    visits = _ensure_list(value)
+    if not visits:
+        return [[]]
+    if isinstance(visits[0], (list, tuple, np.ndarray)) or torch.is_tensor(visits[0]):
+        normalized = []
+        for visit in visits:
+            visit_list = _ensure_list(visit)
+            normalized.append(visit_list)
+        return normalized or [[]]
+    return [visits]
+
+
+def _iter_codes(nested: List[List[Any]]):
+    for visit in nested:
+        for code in visit:
+            yield code
+
+
+def _coerce_scalar(value: Any) -> Any:
+    if torch.is_tensor(value):
+        if value.numel() == 1:
+            return value.item()
+        return value.detach().cpu().tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _resolve_label_key(spec: TaskSpec, sample: Dict[str, Any]) -> str:
+    """Find the label key used by a task sample, allowing PyHealth aliases."""
+    if spec.label_key in sample:
+        return spec.label_key
+
+    task_aliases = {
+        "length_of_stay": "los",
+    }
+    alias = task_aliases.get(spec.name)
+    if alias and alias in sample:
+        return alias
+
+    protected = set(spec.feature_keys) | {"patient_id", "visit_id", "record_id", "mask"}
+    candidates = [key for key in sample.keys() if key not in protected]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    raise KeyError(
+        f"Could not resolve label key for task '{spec.name}'. "
+        f"Expected '{spec.label_key}', sample keys: {sorted(sample.keys())}"
+    )
+
+
+def _build_token_mapping(values: List[Any]) -> Dict[Any, int]:
+    tokens = sorted({value for value in values if value is not None}, key=lambda x: str(x))
+    return {token: idx + 1 for idx, token in enumerate(tokens)}
+
+
+def _normalize_pyhealth_splits(
+    spec: TaskSpec,
+    train_split: Dataset,
+    val_split: Dataset,
+    test_split: Dataset,
+) -> Tuple[TaskSpec, DataLoader, DataLoader, DataLoader]:
+    """Convert PyHealth samples into the same tensorized format as synthetic data."""
+    train_samples = [train_split[i] for i in range(len(train_split))]
+    val_samples = [val_split[i] for i in range(len(val_split))]
+    test_samples = [test_split[i] for i in range(len(test_split))]
+    all_samples = train_samples + val_samples + test_samples
+
+    if not all_samples:
+        raise ValueError("PyHealth task produced no samples.")
+
+    feature_values: Dict[str, List[Any]] = {key: [] for key in spec.feature_keys}
+    label_values: List[Any] = []
+
+    for sample in all_samples:
+        for key in spec.feature_keys:
+            if key not in sample:
+                continue
+            feature_values[key].extend(_iter_codes(_ensure_nested_sequence(sample[key])))
+        label_key = _resolve_label_key(spec, sample)
+        label_raw = sample[label_key]
+        if spec.task_type == "multilabel":
+            label_values.extend(_ensure_list(label_raw))
+        else:
+            label_values.append(_coerce_scalar(label_raw))
+
+    feature_maps = {
+        key: _build_token_mapping(values) for key, values in feature_values.items()
+    }
+
+    label_map: Dict[Any, int] = {}
+    if spec.task_type == "multilabel":
+        label_tokens = sorted({value for value in label_values if value is not None}, key=lambda x: str(x))
+        label_map = {token: idx for idx, token in enumerate(label_tokens)}
+        label_dim = max(len(label_map), 1)
+    else:
+        unique_labels = sorted({value for value in label_values}, key=lambda x: str(x))
+        label_map = {label: idx for idx, label in enumerate(unique_labels)}
+        label_dim = max(len(label_map), spec.label_dim)
+
+    resolved_spec = replace(
+        spec,
+        feature_dims={key: max(len(mapping) + 1, 2) for key, mapping in feature_maps.items()},
+        label_dim=label_dim,
+    )
+
+    def encode_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        for meta_key in ("patient_id", "visit_id", "record_id"):
+            if meta_key in sample:
+                result[meta_key] = sample[meta_key]
+
+        for key in resolved_spec.feature_keys:
+            visits = _ensure_nested_sequence(sample.get(key, []))
+            encoded_visits = []
+            for visit in visits:
+                encoded_visit = [
+                    feature_maps[key][code]
+                    for code in visit
+                    if code in feature_maps[key]
+                ]
+                encoded_visits.append(encoded_visit)
+            result[key] = encoded_visits or [[]]
+
+        label_key = _resolve_label_key(resolved_spec, sample)
+        raw_label = sample[label_key]
+        if resolved_spec.task_type == "multilabel":
+            multihot = np.zeros(resolved_spec.label_dim, dtype=np.float32)
+            for code in _ensure_list(raw_label):
+                if code in label_map:
+                    multihot[label_map[code]] = 1.0
+            result[resolved_spec.label_key] = multihot
+        else:
+            label_value = _coerce_scalar(raw_label)
+            if label_value not in label_map:
+                raise KeyError(
+                    f"Unexpected label value {label_value!r} for task '{resolved_spec.name}'."
+                )
+            result[resolved_spec.label_key] = label_map[label_value]
+        return result
+
+    train_ds = InMemoryEHRDataset([encode_sample(sample) for sample in train_samples])
+    val_ds = InMemoryEHRDataset([encode_sample(sample) for sample in val_samples])
+    test_ds = InMemoryEHRDataset([encode_sample(sample) for sample in test_samples])
+
+    collate = collate_fn_factory(resolved_spec)
+    common = dict(collate_fn=collate, num_workers=0, pin_memory=torch.cuda.is_available())
+
+    train_loader = DataLoader(train_ds, batch_size=32, shuffle=True, **common)
+    val_loader = DataLoader(val_ds, batch_size=32, shuffle=False, **common)
+    test_loader = DataLoader(test_ds, batch_size=32, shuffle=False, **common)
+
+    return resolved_spec, train_loader, val_loader, test_loader
+
+
 # ============================================================
 # Data Loading API
 # ============================================================
@@ -598,7 +781,8 @@ def load_task_data(
     data_root: Optional[str] = None,
     n_synthetic_patients: int = 2000,
     seed: int = SEED,
-) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    return_spec: bool = False,
+) -> Tuple[Any, ...]:
     """Load data for a clinical task.
 
     Args:
@@ -616,9 +800,18 @@ def load_task_data(
     spec = TaskRegistry.get(task_name)
 
     if use_pyhealth and data_root:
-        return _load_pyhealth_data(spec, batch_size, data_root)
+        resolved_spec, train_loader, val_loader, test_loader = _load_pyhealth_data(
+            spec, batch_size, data_root, seed=seed,
+        )
+    else:
+        resolved_spec = spec
+        train_loader, val_loader, test_loader = _load_synthetic_data(
+            spec, batch_size, n_synthetic_patients, seed,
+        )
 
-    return _load_synthetic_data(spec, batch_size, n_synthetic_patients, seed)
+    if return_spec:
+        return resolved_spec, train_loader, val_loader, test_loader
+    return train_loader, val_loader, test_loader
 
 
 def _load_synthetic_data(
@@ -638,7 +831,11 @@ def _load_synthetic_data(
     )
 
     collate = collate_fn_factory(spec)
-    common = dict(collate_fn=collate, num_workers=0, pin_memory=True)
+    common = dict(
+        collate_fn=collate,
+        num_workers=0,
+        pin_memory=torch.cuda.is_available(),
+    )
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **common)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **common)
@@ -648,17 +845,16 @@ def _load_synthetic_data(
 
 
 def _load_pyhealth_data(
-    spec: TaskSpec, batch_size: int, data_root: str,
-) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    spec: TaskSpec, batch_size: int, data_root: str, seed: int = SEED,
+) -> Tuple[TaskSpec, DataLoader, DataLoader, DataLoader]:
     """Load real data through PyHealth.
 
     Requires PyHealth and MIMIC data. Falls back to synthetic on failure.
     """
     try:
         sys.path.insert(0, str(PYHEALTH_ROOT))
-        from pyhealth.datasets import MIMIC3Dataset, SampleDataset
+        from pyhealth.datasets import MIMIC3Dataset
         from pyhealth.datasets.splitter import split_by_patient
-        from pyhealth.datasets.collate import collate_fn_dict
 
         if spec.pyhealth_dataset == "mimic3":
             base_ds = MIMIC3Dataset(root=data_root, tables=["DIAGNOSES_ICD", "PROCEDURES_ICD", "PRESCRIPTIONS"])
@@ -676,18 +872,31 @@ def _load_pyhealth_data(
         task_fn = getattr(task_module, task_cls_name)()
 
         sample_ds = base_ds.set_task(task_fn)
-        train_ds, val_ds, test_ds = split_by_patient(sample_ds, [0.8, 0.1, 0.1])
+        train_ds, val_ds, test_ds = split_by_patient(sample_ds, [0.8, 0.1, 0.1], seed=seed)
 
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn_dict)
-        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn_dict)
-        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn_dict)
-
-        return train_loader, val_loader, test_loader
+        resolved_spec, train_loader, val_loader, test_loader = _normalize_pyhealth_splits(
+            spec, train_ds, val_ds, test_ds,
+        )
+        return (
+            resolved_spec,
+            DataLoader(train_loader.dataset, batch_size=batch_size, shuffle=True,
+                       collate_fn=train_loader.collate_fn, num_workers=0,
+                       pin_memory=torch.cuda.is_available()),
+            DataLoader(val_loader.dataset, batch_size=batch_size, shuffle=False,
+                       collate_fn=val_loader.collate_fn, num_workers=0,
+                       pin_memory=torch.cuda.is_available()),
+            DataLoader(test_loader.dataset, batch_size=batch_size, shuffle=False,
+                       collate_fn=test_loader.collate_fn, num_workers=0,
+                       pin_memory=torch.cuda.is_available()),
+        )
 
     except Exception as e:
         print(f"[prepare] PyHealth loading failed: {e}")
         print("[prepare] Falling back to synthetic data.")
-        return _load_synthetic_data(spec, batch_size, 2000, SEED)
+        return (
+            spec,
+            *_load_synthetic_data(spec, batch_size, 2000, seed),
+        )
 
 
 def get_ddi_matrix(task_name: str, seed: int = SEED) -> Optional[np.ndarray]:
@@ -781,6 +990,8 @@ def _compute_metric(
     """Compute a single metric. Handles edge cases gracefully."""
     from sklearn.metrics import (
         accuracy_score,
+        auc,
+        average_precision_score,
         f1_score,
         jaccard_score,
         precision_recall_curve,
@@ -812,8 +1023,7 @@ def _compute_metric(
         elif name == "auprc":
             if len(np.unique(y_true)) < 2:
                 return 0.5
-            precision, recall, _ = precision_recall_curve(y_true, y_prob)
-            return float(np.trapz(precision, recall))
+            return float(average_precision_score(y_true, y_prob))
         elif name == "pr_auc_samples":
             # Per-label AUPRC, averaged
             n_labels = y_true.shape[1] if y_true.ndim > 1 else 1
@@ -823,8 +1033,7 @@ def _compute_metric(
                 yp = y_prob[:, j] if y_prob.ndim > 1 else y_prob
                 if len(np.unique(yt)) < 2:
                     continue
-                p, r, _ = precision_recall_curve(yt, yp)
-                aucs.append(float(np.trapz(p, r)))
+                aucs.append(float(average_precision_score(yt, yp)))
             return float(np.mean(aucs)) if aucs else 0.0
         else:
             return 0.0
@@ -834,10 +1043,15 @@ def _compute_metric(
 
 def compute_reward(metrics: Dict[str, float], task_spec: TaskSpec) -> float:
     """Compute scalar reward from metrics using task reward components."""
+    aliases = {
+        "jaccard": "jaccard_samples",
+        "ddi_penalty": "ddi_rate",
+    }
     reward = 0.0
     for component, weight in task_spec.reward_components.items():
-        if component in metrics:
-            reward += weight * metrics[component]
+        metric_name = component if component in metrics else aliases.get(component, component)
+        if metric_name in metrics:
+            reward += weight * metrics[metric_name]
     return reward
 
 
@@ -903,7 +1117,10 @@ def count_parameters(model: torch.nn.Module) -> int:
 
 def get_peak_vram_mb() -> float:
     if torch.cuda.is_available():
-        return torch.cuda.max_memory_allocated() / (1024 * 1024)
+        try:
+            return torch.cuda.max_memory_allocated() / (1024 * 1024)
+        except Exception:
+            return 0.0
     return 0.0
 
 
