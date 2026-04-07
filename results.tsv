@@ -6,3 +6,6 @@ c39e336	7574472	0.974605	0.000000	0.0	leaked	support2_survival	baseline REINFORC
 leakfix	7592232	0.778981	0.778981	0.0	keep	support2_dzclass	baseline REINFORCE, 120s, 9105 real patients, leak-fixed
 leakfix	7592233	0.935612	0.935612	0.0	keep	support2_survival	baseline REINFORCE, 120s, 9105 real patients, leak-fixed
 a314450	7601425	0.961109	0.961109	0.2	keep	mimic4_mortality	baseline REINFORCE, 120s, 223452 real patients (MIMIC-IV 3.1)
+a314450	7601440	0.668758	0.668758	0.2	keep	mimic4_readmission	baseline REINFORCE, 120s, 223452 real patients (MIMIC-IV 3.1)
+a314450	7601441	0.481408	0.481408	0.2	keep	mimic4_los	baseline REINFORCE, 120s, 223452 real patients (MIMIC-IV 3.1)
+a314450	7601442	0.166126	0.166126	0.4	keep	mimic4_drugrec	baseline REINFORCE, 120s, 223452 real patients (MIMIC-IV 3.1)
