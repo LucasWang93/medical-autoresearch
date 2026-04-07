@@ -76,6 +76,13 @@ autoresearch (Karpathy) experiment loop + PyHealth medical infrastructure.
 | mortality_prediction | binary | auroc | Adaptive history attention |
 | readmission_prediction | binary | auroc | Visit pattern recognition |
 | length_of_stay | multiclass | f1_macro | Sequential feature selection |
+| support2_mortality | binary | auroc | SUPPORT2 real data, 9105 patients |
+| support2_dzclass | multiclass | f1_macro | Disease classification |
+| support2_survival | binary | auroc | 2-month survival prediction |
+| mimic4_mortality | binary | auroc | MIMIC-IV real data, ~364K patients |
+| mimic4_readmission | binary | auroc | 30-day readmission |
+| mimic4_los | multiclass | f1_macro | LOS bucket (<3d/3-7d/7-14d/>14d) |
+| mimic4_drugrec | multilabel | jaccard_samples | Drug recommendation, top-300 drugs |
 
 ## CLI Args (train.py)
 - `--task NAME` — override task
@@ -90,9 +97,17 @@ autoresearch (Karpathy) experiment loop + PyHealth medical infrastructure.
 call `loader.update_reward(task_name, reward)` to feed learning progress
 back. Strategies: round_robin, proportional, bandit.
 
+## Data Sources
+- **Synthetic**: Self-contained, no external data needed (drug_recommendation, mortality_prediction, readmission_prediction, length_of_stay)
+- **SUPPORT2**: Public dataset from HuggingFace (9105 patients, auto-downloaded)
+- **MIMIC-IV 3.1**: Local data at `/home/sw2572/project_pi_yz875/sw2572/data/physionet.org/files/mimiciv/3.1/` (hosp/ and icu/ dirs)
+  - Reads CSV.gz directly with pandas — no PyHealth dependency
+  - Dev mode (n_patients ≤ 1000): limits rows for login node testing
+  - Full mode (GPU nodes): loads all 364K patients
+
 ## Dependencies
 - System module: `PyTorch/2.7.1-foss-2024a-CUDA-12.6.0`
-- User pip: `scikit-learn` (auto-installed by run.sh)
+- User pip: `scikit-learn datasets pandas` (auto-installed by run.sh)
 - PyHealth at `../PyHealth/` (for future real-data mode)
 
 ## Related Repos
