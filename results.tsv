@@ -1,5 +1,7 @@
 commit	job_id	primary_metric	reward	memory_gb	status	task	description
 baseline	7439080	0.654256	0.000000	0.0	keep	drug_recommendation	baseline REINFORCE, 60s budget, 2000 synthetic patients
 c39e336	7574470	0.916346	0.916346	0.0	keep	support2_mortality	baseline REINFORCE, 120s, 9105 real patients (SUPPORT2)
-c39e336	7574471	1.000000	1.000000	0.0	keep	support2_dzclass	baseline REINFORCE, 120s, 9105 real patients (SUPPORT2)
-c39e336	7574472	0.974605	0.974605	0.0	keep	support2_survival	baseline REINFORCE, 120s, 9105 real patients (SUPPORT2)
+c39e336	7574471	1.000000	0.000000	0.0	leaked	support2_dzclass	baseline REINFORCE, 120s, 9105 real patients (SUPPORT2) — LEAKED dzgroup/dzclass in features
+c39e336	7574472	0.974605	0.000000	0.0	leaked	support2_survival	baseline REINFORCE, 120s, 9105 real patients (SUPPORT2) — LEAKED sps/surv/prg in features
+leakfix	7592232	0.778981	0.778981	0.0	keep	support2_dzclass	baseline REINFORCE, 120s, 9105 real patients, leak-fixed
+leakfix	7592233	0.935612	0.935612	0.0	keep	support2_survival	baseline REINFORCE, 120s, 9105 real patients, leak-fixed

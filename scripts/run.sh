@@ -43,7 +43,7 @@ module load StdEnv 2>/dev/null || true
 module load PyTorch/2.7.1-foss-2024a-CUDA-12.6.0 2>/dev/null || true
 
 # Install missing deps into user site
-pip install --user scikit-learn datasets 2>/dev/null || true
+pip install --user scikit-learn datasets pandas 2>/dev/null || true
 
 # GPU diagnostics
 python -c "

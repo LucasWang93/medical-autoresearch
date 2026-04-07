@@ -804,6 +804,13 @@ def load_task_data(
         resolved_spec, train_loader, val_loader, test_loader = _load_support2_data(
             spec, batch_size, seed,
         )
+    elif task_name.startswith("mimic4_"):
+        # MIMIC-IV tasks use real data from local CSV files
+        resolved_spec, train_loader, val_loader, test_loader = _load_mimic4_data(
+            spec, batch_size, seed,
+            data_root=data_root,
+            dev=(n_synthetic_patients <= 1000),  # small n_patients → dev mode
+        )
     elif use_pyhealth and data_root:
         resolved_spec, train_loader, val_loader, test_loader = _load_pyhealth_data(
             spec, batch_size, data_root, seed=seed,
@@ -1191,6 +1198,368 @@ TaskRegistry.register(TaskSpec(
     metrics=["auroc", "auprc", "f1"],
     reward_components={"auroc": 1.0},
     pyhealth_dataset="support2",
+))
+
+
+# ============================================================
+# MIMIC-IV — Real longitudinal EHR data (~364K patients)
+# ============================================================
+
+# Default MIMIC-IV data root (overridable via --data-root)
+_MIMIC4_DEFAULT_ROOT = "/home/sw2572/project_pi_yz875/sw2572/data/physionet.org/files/mimiciv/3.1"
+
+# Vocabulary caps — keep top-N codes to manage embedding dimensions
+_MIMIC4_MAX_DIAG_CODES = 500    # top 500 ICD diagnosis codes
+_MIMIC4_MAX_PROC_CODES = 200    # top 200 ICD procedure codes
+_MIMIC4_MAX_DRUG_CODES = 300    # top 300 drug names
+
+# LOS buckets (days): <3, 3-7, 7-14, >14
+_MIMIC4_LOS_BINS = [3.0, 7.0, 14.0]
+
+
+class MIMIC4Dataset(Dataset):
+    """MIMIC-IV dataset loader — reads CSV.gz directly without PyHealth.
+
+    Builds patient → visit (admission) → codes structure from:
+      - admissions.csv.gz: visit metadata + mortality/LOS labels
+      - diagnoses_icd.csv.gz: ICD diagnosis codes per visit
+      - procedures_icd.csv.gz: ICD procedure codes per visit
+      - prescriptions.csv.gz: drug names per visit (for drug_rec task)
+
+    Each admission = one visit.  Patients with >= 2 admissions get
+    sequential visit history suitable for our GRU pipeline.
+    """
+
+    def __init__(
+        self,
+        task_spec: TaskSpec,
+        data_root: Optional[str] = None,
+        seed: int = SEED,
+        dev: bool = False,
+        max_patients: int = 0,
+    ):
+        super().__init__()
+        import pandas as pd
+
+        self.spec = task_spec
+        self.rng = np.random.RandomState(seed)
+        self.ddi_matrix = None
+        root = data_root or _MIMIC4_DEFAULT_ROOT
+
+        # ---- 1. Load admissions (core table) ----
+        # In dev mode, limit initial rows to save memory on login nodes
+        read_kw: Dict[str, Any] = {}
+        if dev or max_patients > 0:
+            read_kw["nrows"] = max(max_patients * 10, 10000) if max_patients > 0 else 10000
+
+        adm = pd.read_csv(
+            os.path.join(root, "hosp", "admissions.csv.gz"),
+            usecols=["subject_id", "hadm_id", "admittime", "dischtime",
+                      "hospital_expire_flag"],
+            parse_dates=["admittime", "dischtime"],
+            **read_kw,
+        )
+        adm = adm.dropna(subset=["subject_id", "hadm_id"])
+        adm["subject_id"] = adm["subject_id"].astype(int)
+        adm["hadm_id"] = adm["hadm_id"].astype(int)
+        adm = adm.sort_values(["subject_id", "admittime"])
+
+        # Dev mode: keep only first N patients for quick testing
+        if dev or max_patients > 0:
+            n_keep = max_patients if max_patients > 0 else 1000
+            keep_ids = adm["subject_id"].unique()[:n_keep]
+            adm = adm[adm["subject_id"].isin(keep_ids)]
+
+        hadm_ids = set(adm["hadm_id"].values)
+
+        # ---- 2. Load diagnoses ----
+        diag_kw: Dict[str, Any] = {}
+        if dev or max_patients > 0:
+            diag_kw["nrows"] = 200000  # ~enough for dev subset
+        diag = pd.read_csv(
+            os.path.join(root, "hosp", "diagnoses_icd.csv.gz"),
+            usecols=["hadm_id", "icd_code"],
+            **diag_kw,
+        )
+        diag = diag[diag["hadm_id"].isin(hadm_ids)]
+        diag["icd_code"] = diag["icd_code"].astype(str)
+
+        # Build top-N diagnosis vocabulary
+        diag_counts = diag["icd_code"].value_counts()
+        top_diag = set(diag_counts.head(_MIMIC4_MAX_DIAG_CODES).index)
+        diag = diag[diag["icd_code"].isin(top_diag)]
+        diag_vocab = {code: idx + 1 for idx, code in enumerate(sorted(top_diag))}
+
+        # ---- 3. Load procedures ----
+        proc_kw: Dict[str, Any] = {}
+        if dev or max_patients > 0:
+            proc_kw["nrows"] = 50000
+        proc = pd.read_csv(
+            os.path.join(root, "hosp", "procedures_icd.csv.gz"),
+            usecols=["hadm_id", "icd_code"],
+            **proc_kw,
+        )
+        proc = proc[proc["hadm_id"].isin(hadm_ids)]
+        proc["icd_code"] = proc["icd_code"].astype(str)
+
+        proc_counts = proc["icd_code"].value_counts()
+        top_proc = set(proc_counts.head(_MIMIC4_MAX_PROC_CODES).index)
+        proc = proc[proc["icd_code"].isin(top_proc)]
+        proc_vocab = {code: idx + 1 for idx, code in enumerate(sorted(top_proc))}
+
+        # ---- 4. Load prescriptions (only for drug_rec task) ----
+        drug_vocab: Dict[str, int] = {}
+        drug_per_hadm: Dict[int, List[int]] = {}
+        need_drugs = task_spec.name == "mimic4_drugrec"
+
+        if need_drugs:
+            # Read only needed columns; prescriptions is large (20M rows)
+            rx_kw: Dict[str, Any] = {}
+            if dev or max_patients > 0:
+                rx_kw["nrows"] = 500000
+            rx = pd.read_csv(
+                os.path.join(root, "hosp", "prescriptions.csv.gz"),
+                usecols=["hadm_id", "drug"],
+                **rx_kw,
+            )
+            rx = rx[rx["hadm_id"].isin(hadm_ids)]
+            rx["drug"] = rx["drug"].astype(str)
+
+            drug_counts = rx["drug"].value_counts()
+            top_drugs = set(drug_counts.head(_MIMIC4_MAX_DRUG_CODES).index)
+            rx = rx[rx["drug"].isin(top_drugs)]
+            drug_vocab = {d: idx for idx, d in enumerate(sorted(top_drugs))}
+
+            for hadm_id, group in rx.groupby("hadm_id"):
+                codes = list({drug_vocab[d] for d in group["drug"] if d in drug_vocab})
+                if codes:
+                    drug_per_hadm[int(hadm_id)] = codes
+
+        # ---- 5. Group codes per visit ----
+        diag_per_hadm: Dict[int, List[int]] = {}
+        for hadm_id, group in diag.groupby("hadm_id"):
+            codes = list({diag_vocab[c] for c in group["icd_code"] if c in diag_vocab})
+            if codes:
+                diag_per_hadm[int(hadm_id)] = codes
+
+        proc_per_hadm: Dict[int, List[int]] = {}
+        for hadm_id, group in proc.groupby("hadm_id"):
+            codes = list({proc_vocab[c] for c in group["icd_code"] if c in proc_vocab})
+            if codes:
+                proc_per_hadm[int(hadm_id)] = codes
+
+        # Free dataframes
+        del diag, proc
+        if need_drugs:
+            del rx
+
+        # ---- 6. Build patient visit sequences ----
+        self.diag_vocab_size = len(diag_vocab) + 1  # +1 for padding
+        self.proc_vocab_size = len(proc_vocab) + 1
+        self.drug_vocab_size = len(drug_vocab) if drug_vocab else 0
+
+        self.samples: List[Dict[str, Any]] = []
+        patients = adm.groupby("subject_id")
+
+        for subject_id, visits in patients:
+            visit_list = visits.sort_values("admittime").to_dict("records")
+            if len(visit_list) < 2:
+                continue  # need >= 2 visits for sequential prediction
+
+            # Build per-visit code lists
+            visit_diags = []
+            visit_procs = []
+            visit_drugs = []
+
+            for v in visit_list:
+                hid = int(v["hadm_id"])
+                visit_diags.append(diag_per_hadm.get(hid, [0]))
+                visit_procs.append(proc_per_hadm.get(hid, [0]))
+                if need_drugs:
+                    visit_drugs.append(drug_per_hadm.get(hid, []))
+
+            # Create samples: one per visit (from visit index 1 onward)
+            for t in range(1, len(visit_list)):
+                sample: Dict[str, Any] = {}
+                v = visit_list[t]
+
+                # Feature history up to and including visit t
+                sample["conditions"] = visit_diags[: t + 1]
+                sample["procedures"] = visit_procs[: t + 1]
+
+                if need_drugs:
+                    sample["drugs_hist"] = visit_drugs[:t]
+
+                # Labels
+                if task_spec.label_key == "mortality":
+                    sample["mortality"] = int(v.get("hospital_expire_flag", 0))
+                elif task_spec.label_key == "readmission":
+                    # 30-day readmission: was there another admission within 30 days?
+                    if t + 1 < len(visit_list):
+                        dischtime = v.get("dischtime")
+                        next_admittime = visit_list[t + 1].get("admittime")
+                        if pd.notna(dischtime) and pd.notna(next_admittime):
+                            gap = (next_admittime - dischtime).days
+                            sample["readmission"] = 1 if gap <= 30 else 0
+                        else:
+                            sample["readmission"] = 0
+                    else:
+                        sample["readmission"] = 0
+                elif task_spec.label_key == "los_bucket":
+                    # LOS in days
+                    dischtime = v.get("dischtime")
+                    admittime = v.get("admittime")
+                    if pd.notna(dischtime) and pd.notna(admittime):
+                        los_days = (dischtime - admittime).total_seconds() / 86400
+                    else:
+                        los_days = 0.0
+                    # Bucket: 0=<3d, 1=3-7d, 2=7-14d, 3=>14d
+                    bucket = int(np.searchsorted(_MIMIC4_LOS_BINS, los_days))
+                    sample["los_bucket"] = bucket
+                elif task_spec.label_key == "drugs":
+                    # Multilabel: drugs prescribed in current visit
+                    hid = int(v["hadm_id"])
+                    target = drug_per_hadm.get(hid, [])
+                    multihot = np.zeros(len(drug_vocab), dtype=np.float32)
+                    for d in target:
+                        multihot[d] = 1.0
+                    sample["drugs"] = multihot
+
+                self.samples.append(sample)
+
+        print(f"[MIMIC-IV] Loaded {len(self.samples)} samples from "
+              f"{len(patients)} patients ({task_spec.name})")
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+
+def _load_mimic4_data(
+    spec: TaskSpec, batch_size: int, seed: int,
+    data_root: Optional[str] = None,
+    dev: bool = False,
+    max_patients: int = 0,
+) -> Tuple[TaskSpec, DataLoader, DataLoader, DataLoader]:
+    """Load MIMIC-IV real data, split 80/10/10 by patient."""
+    dataset = MIMIC4Dataset(
+        spec, data_root=data_root, seed=seed,
+        dev=dev, max_patients=max_patients,
+    )
+
+    # Update spec with actual vocab sizes
+    feature_dims = {
+        "conditions": dataset.diag_vocab_size,
+        "procedures": dataset.proc_vocab_size,
+    }
+    label_dim = spec.label_dim
+    if spec.task_type == "multilabel" and dataset.drug_vocab_size > 0:
+        label_dim = dataset.drug_vocab_size
+
+    resolved_spec = replace(spec, feature_dims=feature_dims, label_dim=label_dim)
+
+    n = len(dataset)
+    n_train = int(n * 0.8)
+    n_val = int(n * 0.1)
+    n_test = n - n_train - n_val
+
+    gen = torch.Generator().manual_seed(seed)
+    train_ds, val_ds, test_ds = torch.utils.data.random_split(
+        dataset, [n_train, n_val, n_test], generator=gen,
+    )
+
+    collate = collate_fn_factory(resolved_spec)
+    common = dict(
+        collate_fn=collate, num_workers=0,
+        pin_memory=torch.cuda.is_available(),
+    )
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **common)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **common)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, **common)
+
+    return resolved_spec, train_loader, val_loader, test_loader
+
+
+# ---- Register MIMIC-IV tasks ----
+
+TaskRegistry.register(TaskSpec(
+    name="mimic4_mortality",
+    task_type="binary",
+    description=(
+        "Predict in-hospital mortality from MIMIC-IV longitudinal EHR. "
+        "Uses ICD diagnoses + procedures across multiple admissions. "
+        "~364K patients, real ICU data."
+    ),
+    feature_keys=["conditions", "procedures"],
+    label_key="mortality",
+    feature_dims={"conditions": _MIMIC4_MAX_DIAG_CODES + 1, "procedures": _MIMIC4_MAX_PROC_CODES + 1},
+    label_dim=2,
+    primary_metric="auroc",
+    metric_direction="max",
+    metrics=["auroc", "auprc", "f1"],
+    reward_components={"auroc": 1.0},
+    pyhealth_dataset="mimic4",
+    pyhealth_task="mortality_prediction",
+))
+
+TaskRegistry.register(TaskSpec(
+    name="mimic4_readmission",
+    task_type="binary",
+    description=(
+        "Predict 30-day hospital readmission from MIMIC-IV longitudinal EHR. "
+        "Uses ICD diagnoses + procedures across multiple admissions."
+    ),
+    feature_keys=["conditions", "procedures"],
+    label_key="readmission",
+    feature_dims={"conditions": _MIMIC4_MAX_DIAG_CODES + 1, "procedures": _MIMIC4_MAX_PROC_CODES + 1},
+    label_dim=2,
+    primary_metric="auroc",
+    metric_direction="max",
+    metrics=["auroc", "auprc", "f1"],
+    reward_components={"auroc": 1.0},
+    pyhealth_dataset="mimic4",
+    pyhealth_task="readmission_prediction",
+))
+
+TaskRegistry.register(TaskSpec(
+    name="mimic4_los",
+    task_type="multiclass",
+    description=(
+        "Predict length-of-stay bucket (<3d, 3-7d, 7-14d, >14d) from MIMIC-IV. "
+        "Uses ICD diagnoses + procedures across multiple admissions."
+    ),
+    feature_keys=["conditions", "procedures"],
+    label_key="los_bucket",
+    feature_dims={"conditions": _MIMIC4_MAX_DIAG_CODES + 1, "procedures": _MIMIC4_MAX_PROC_CODES + 1},
+    label_dim=4,
+    primary_metric="f1_macro",
+    metric_direction="max",
+    metrics=["f1_macro", "accuracy", "auroc_macro"],
+    reward_components={"f1_macro": 1.0},
+    pyhealth_dataset="mimic4",
+    pyhealth_task="length_of_stay_prediction",
+))
+
+TaskRegistry.register(TaskSpec(
+    name="mimic4_drugrec",
+    task_type="multilabel",
+    description=(
+        "Predict drug prescriptions from MIMIC-IV longitudinal EHR. "
+        "Uses ICD diagnoses + procedures as features, predicts top-300 drugs."
+    ),
+    feature_keys=["conditions", "procedures", "drugs_hist"],
+    label_key="drugs",
+    feature_dims={"conditions": _MIMIC4_MAX_DIAG_CODES + 1, "procedures": _MIMIC4_MAX_PROC_CODES + 1,
+                  "drugs_hist": _MIMIC4_MAX_DRUG_CODES},
+    label_dim=_MIMIC4_MAX_DRUG_CODES,
+    primary_metric="jaccard_samples",
+    metric_direction="max",
+    metrics=["jaccard_samples", "f1_samples", "pr_auc_samples"],
+    reward_components={"jaccard_samples": 1.0, "ddi_rate": -0.5},
+    pyhealth_dataset="mimic4",
+    pyhealth_task="drug_recommendation",
 ))
 
 

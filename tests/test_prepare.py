@@ -106,7 +106,11 @@ class TestTaskRegistry(unittest.TestCase):
         self.assertIn("support2_mortality", names)
         self.assertIn("support2_dzclass", names)
         self.assertIn("support2_survival", names)
-        self.assertEqual(len(names), 7)
+        self.assertIn("mimic4_mortality", names)
+        self.assertIn("mimic4_readmission", names)
+        self.assertIn("mimic4_los", names)
+        self.assertIn("mimic4_drugrec", names)
+        self.assertEqual(len(names), 11)
 
     def test_get_returns_correct_spec(self):
         spec = prepare.TaskRegistry.get("drug_recommendation")
@@ -120,7 +124,7 @@ class TestTaskRegistry(unittest.TestCase):
 
     def test_select_tasks_all(self):
         specs = prepare.TaskRegistry.select_tasks()
-        self.assertEqual(len(specs), 7)
+        self.assertEqual(len(specs), 11)
 
     def test_select_tasks_subset(self):
         specs = prepare.TaskRegistry.select_tasks(["mortality_prediction", "length_of_stay"])
@@ -926,6 +930,124 @@ class TestSupport2DataLoading(unittest.TestCase):
         sample = ds[0]
         self.assertIn("survival_2m", sample)
         self.assertIn(sample["survival_2m"], [0, 1])
+
+
+def _has_mimic4_data():
+    """Check if MIMIC-IV data is available locally."""
+    import os
+    root = "/home/sw2572/project_pi_yz875/sw2572/data/physionet.org/files/mimiciv/3.1"
+    return os.path.isdir(os.path.join(root, "hosp"))
+
+
+class TestMIMIC4Tasks(unittest.TestCase):
+    """Test MIMIC-IV task registration (no data needed)."""
+
+    def test_four_tasks_registered(self):
+        names = prepare.TaskRegistry.list_tasks()
+        self.assertIn("mimic4_mortality", names)
+        self.assertIn("mimic4_readmission", names)
+        self.assertIn("mimic4_los", names)
+        self.assertIn("mimic4_drugrec", names)
+
+    def test_mortality_spec(self):
+        spec = prepare.TaskRegistry.get("mimic4_mortality")
+        self.assertEqual(spec.task_type, "binary")
+        self.assertEqual(spec.label_key, "mortality")
+        self.assertEqual(spec.primary_metric, "auroc")
+        self.assertEqual(spec.label_dim, 2)
+
+    def test_readmission_spec(self):
+        spec = prepare.TaskRegistry.get("mimic4_readmission")
+        self.assertEqual(spec.task_type, "binary")
+        self.assertEqual(spec.label_key, "readmission")
+
+    def test_los_spec(self):
+        spec = prepare.TaskRegistry.get("mimic4_los")
+        self.assertEqual(spec.task_type, "multiclass")
+        self.assertEqual(spec.label_key, "los_bucket")
+        self.assertEqual(spec.label_dim, 4)
+
+    def test_drugrec_spec(self):
+        spec = prepare.TaskRegistry.get("mimic4_drugrec")
+        self.assertEqual(spec.task_type, "multilabel")
+        self.assertEqual(spec.label_key, "drugs")
+        self.assertIn("drugs_hist", spec.feature_keys)
+
+
+@unittest.skipUnless(_has_mimic4_data(), "requires local MIMIC-IV data")
+class TestMIMIC4DataLoading(unittest.TestCase):
+    """Test MIMIC-IV data loading with tiny dev subset (200 patients)."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Use max_patients=200 directly for minimal memory footprint
+        spec = prepare.TaskRegistry.get("mimic4_mortality")
+        ds = prepare.MIMIC4Dataset(spec, seed=42, max_patients=200)
+        cls.dataset = ds
+        resolved = prepare.replace(
+            spec,
+            feature_dims={"conditions": ds.diag_vocab_size, "procedures": ds.proc_vocab_size},
+        )
+        cls.spec = resolved
+        # Manual split
+        n = len(ds)
+        n_train = int(n * 0.8)
+        n_val = int(n * 0.1)
+        n_test = n - n_train - n_val
+        import torch
+        gen = torch.Generator().manual_seed(42)
+        train_ds, val_ds, test_ds = torch.utils.data.random_split(
+            ds, [n_train, n_val, n_test], generator=gen,
+        )
+        collate = prepare.collate_fn_factory(resolved)
+        cls.train_dl = torch.utils.data.DataLoader(train_ds, batch_size=8, collate_fn=collate)
+        cls.val_dl = torch.utils.data.DataLoader(val_ds, batch_size=8, collate_fn=collate)
+        cls.test_dl = torch.utils.data.DataLoader(test_ds, batch_size=8, collate_fn=collate)
+
+    def test_split_sizes(self):
+        total = (len(self.train_dl.dataset) + len(self.val_dl.dataset)
+                 + len(self.test_dl.dataset))
+        self.assertGreater(total, 100)
+
+    def test_vocab_size_updated(self):
+        self.assertGreater(self.spec.feature_dims["conditions"], 10)
+        self.assertGreater(self.spec.feature_dims["procedures"], 10)
+
+    def test_batch_shapes(self):
+        batch = next(iter(self.train_dl))
+        self.assertEqual(batch["conditions"].ndim, 3)
+        self.assertEqual(batch["procedures"].ndim, 3)
+        self.assertEqual(batch["mask"].ndim, 2)
+        self.assertIn(batch["mortality"].dtype, [torch.long, torch.int64])
+
+    def test_labels_binary(self):
+        batch = next(iter(self.train_dl))
+        labels = batch["mortality"]
+        self.assertTrue((labels >= 0).all())
+        self.assertTrue((labels <= 1).all())
+
+    def test_readmission_loading(self):
+        spec = prepare.TaskRegistry.get("mimic4_readmission")
+        ds = prepare.MIMIC4Dataset(spec, seed=42, max_patients=200)
+        sample = ds[0]
+        self.assertIn("readmission", sample)
+        self.assertIn(sample["readmission"], [0, 1])
+
+    def test_los_loading(self):
+        spec = prepare.TaskRegistry.get("mimic4_los")
+        ds = prepare.MIMIC4Dataset(spec, seed=42, max_patients=200)
+        sample = ds[0]
+        self.assertIn("los_bucket", sample)
+        self.assertIn(sample["los_bucket"], [0, 1, 2, 3])
+
+    def test_drugrec_loading(self):
+        spec = prepare.TaskRegistry.get("mimic4_drugrec")
+        ds = prepare.MIMIC4Dataset(spec, seed=42, max_patients=200)
+        self.assertGreater(len(ds), 0)
+        sample = ds[0]
+        self.assertIn("drugs", sample)
+        self.assertEqual(sample["drugs"].ndim, 1)
+        self.assertIn("drugs_hist", sample)
 
 
 if __name__ == "__main__":
