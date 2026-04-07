@@ -799,7 +799,12 @@ def load_task_data(
     """
     spec = TaskRegistry.get(task_name)
 
-    if use_pyhealth and data_root:
+    if task_name.startswith("support2_"):
+        # SUPPORT2 tasks always use real public data
+        resolved_spec, train_loader, val_loader, test_loader = _load_support2_data(
+            spec, batch_size, seed,
+        )
+    elif use_pyhealth and data_root:
         resolved_spec, train_loader, val_loader, test_loader = _load_pyhealth_data(
             spec, batch_size, data_root, seed=seed,
         )
@@ -897,6 +902,272 @@ def _load_pyhealth_data(
             spec,
             *_load_synthetic_data(spec, batch_size, 2000, seed),
         )
+
+
+# ============================================================
+# SUPPORT2 — Real public clinical data (9105 patients)
+# ============================================================
+
+# Feature groups for SUPPORT2 discretization.
+# Each numeric feature is binned into N_BINS codes; categorical features
+# get one code per unique value.  The result fits our [batch, visits, codes]
+# tensor format by treating each feature group as one "visit".
+
+_SUPPORT2_NUMERIC_FEATURES = {
+    "vitals": ["meanbp", "hrt", "resp", "temp", "pafi"],
+    "labs":   ["wblc", "alb", "bili", "crea", "sod", "ph", "glucose", "bun"],
+    "scores": ["sps", "aps", "scoma", "num.co"],
+    "adl":    ["adlp", "adls", "adlsc"],
+}
+
+_SUPPORT2_CATEGORICAL_FEATURES = {
+    "demographics": ["sex", "race", "income", "dzgroup", "dzclass", "ca", "dnr"],
+}
+
+_SUPPORT2_N_BINS = 10  # quantile bins per numeric feature
+
+
+class Support2Dataset(Dataset):
+    """SUPPORT2 public dataset adapted for our framework.
+
+    Downloads 9105 seriously-ill patient records from HuggingFace and
+    discretizes features into medical-code-like integers so they work
+    with our existing CodeEmbedding → GRU → RL pipeline.
+
+    Feature groups become "visits", codes within each group become "codes
+    per visit".  This is a slight abstraction but keeps the entire
+    model/eval pipeline identical to the synthetic EHR path.
+    """
+
+    def __init__(
+        self,
+        task_spec: TaskSpec,
+        seed: int = SEED,
+        cache_dir: Optional[str] = None,
+    ):
+        super().__init__()
+        self.spec = task_spec
+        self.rng = np.random.RandomState(seed)
+        self.ddi_matrix = None  # no DDI for SUPPORT2 tasks
+
+        raw = self._download(cache_dir)
+        self.vocab_size, self.samples = self._build_samples(raw, task_spec)
+
+    # ---- download ----
+
+    @staticmethod
+    def _download(cache_dir: Optional[str] = None) -> List[dict]:
+        """Download SUPPORT2 from HuggingFace (cached after first call)."""
+        try:
+            from datasets import load_dataset
+        except ImportError:
+            raise ImportError(
+                "pip install datasets  # required for SUPPORT2"
+            )
+        kwargs = {"cache_dir": cache_dir} if cache_dir else {}
+        ds = load_dataset("jarrydmartinx/support2", split="train", **kwargs)
+        return [dict(row) for row in ds]
+
+    # ---- discretize ----
+
+    def _build_samples(
+        self, raw: List[dict], spec: TaskSpec,
+    ) -> Tuple[int, List[Dict[str, Any]]]:
+        """Discretize raw SUPPORT2 rows into our sample format."""
+
+        # 1. Compute quantile bin edges for each numeric feature
+        bin_edges: Dict[str, np.ndarray] = {}
+        for group_features in _SUPPORT2_NUMERIC_FEATURES.values():
+            for feat in group_features:
+                vals = [r[feat] for r in raw if r.get(feat) is not None]
+                if vals:
+                    bin_edges[feat] = np.nanquantile(
+                        vals,
+                        np.linspace(0, 1, _SUPPORT2_N_BINS + 1)[1:-1],
+                    )
+
+        # 2. Build categorical vocabularies
+        cat_vocabs: Dict[str, Dict[Any, int]] = {}
+        for group_features in _SUPPORT2_CATEGORICAL_FEATURES.values():
+            for feat in group_features:
+                unique = sorted({str(r.get(feat, "missing")) for r in raw})
+                cat_vocabs[feat] = {v: i + 1 for i, v in enumerate(unique)}
+
+        # 3. Compute vocab size: sum of all bins + all cat values + 1 (padding)
+        offset = 1  # 0 = padding
+        feat_offset: Dict[str, int] = {}
+        for group_features in _SUPPORT2_NUMERIC_FEATURES.values():
+            for feat in group_features:
+                feat_offset[feat] = offset
+                offset += _SUPPORT2_N_BINS
+        for group_features in _SUPPORT2_CATEGORICAL_FEATURES.values():
+            for feat in group_features:
+                feat_offset[feat] = offset
+                offset += len(cat_vocabs.get(feat, {}))
+        vocab_size = offset
+
+        # 4. Convert each patient row into a sample
+        samples = []
+        for row in raw:
+            sample: Dict[str, Any] = {}
+
+            # Build feature groups as "visits"
+            all_visits: List[List[int]] = []
+
+            # Numeric feature groups → one visit each
+            for group_name, group_features in _SUPPORT2_NUMERIC_FEATURES.items():
+                codes = []
+                for feat in group_features:
+                    val = row.get(feat)
+                    if val is not None and feat in bin_edges:
+                        bin_idx = int(np.searchsorted(bin_edges[feat], val))
+                        codes.append(feat_offset[feat] + bin_idx)
+                    # skip missing
+                if not codes:
+                    codes = [0]  # padding
+                all_visits.append(codes)
+
+            # Categorical feature group → one visit
+            for group_name, group_features in _SUPPORT2_CATEGORICAL_FEATURES.items():
+                codes = []
+                for feat in group_features:
+                    val = str(row.get(feat, "missing"))
+                    vocab = cat_vocabs.get(feat, {})
+                    if val in vocab:
+                        codes.append(feat_offset[feat] + vocab[val])
+                if not codes:
+                    codes = [0]
+                all_visits.append(codes)
+
+            # Map to our standard feature keys:
+            # "conditions" gets vitals+labs+scores (clinical observations)
+            # "procedures" gets demographics+adl (patient context)
+            clinical_visits = all_visits[:3]  # vitals, labs, scores
+            context_visits = all_visits[3:]   # adl, demographics
+
+            sample["conditions"] = clinical_visits if clinical_visits else [[0]]
+            sample["procedures"] = context_visits if context_visits else [[0]]
+
+            # Labels
+            if spec.label_key == "hospdead":
+                sample["hospdead"] = int(row.get("hospdead", 0))
+            elif spec.label_key == "dzclass":
+                dzclass_map = {
+                    "ARF/MOSF": 0,
+                    "COPD/CHF/Cirrhosis": 1,
+                    "Cancer": 2,
+                    "Coma": 3,
+                }
+                sample["dzclass"] = dzclass_map.get(row.get("dzclass", ""), 0)
+            elif spec.label_key == "survival_2m":
+                surv = row.get("surv2m")
+                # Binary: 1 if survived (surv2m >= 0.5), 0 if not
+                sample["survival_2m"] = 1 if (surv is not None and surv >= 0.5) else 0
+
+            samples.append(sample)
+
+        return vocab_size, samples
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+
+def _load_support2_data(
+    spec: TaskSpec, batch_size: int, seed: int,
+) -> Tuple[TaskSpec, DataLoader, DataLoader, DataLoader]:
+    """Load SUPPORT2 real data, split 80/10/10."""
+    dataset = Support2Dataset(spec, seed=seed)
+
+    # Update spec with actual vocab size from data
+    resolved_spec = replace(
+        spec,
+        feature_dims={
+            "conditions": dataset.vocab_size,
+            "procedures": dataset.vocab_size,
+        },
+    )
+
+    n = len(dataset)
+    n_train = int(n * 0.8)
+    n_val = int(n * 0.1)
+    n_test = n - n_train - n_val
+
+    gen = torch.Generator().manual_seed(seed)
+    train_ds, val_ds, test_ds = torch.utils.data.random_split(
+        dataset, [n_train, n_val, n_test], generator=gen,
+    )
+
+    collate = collate_fn_factory(resolved_spec)
+    common = dict(
+        collate_fn=collate, num_workers=0,
+        pin_memory=torch.cuda.is_available(),
+    )
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **common)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **common)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, **common)
+
+    return resolved_spec, train_loader, val_loader, test_loader
+
+
+# ---- Register SUPPORT2 tasks ----
+
+TaskRegistry.register(TaskSpec(
+    name="support2_mortality",
+    task_type="binary",
+    description=(
+        "Predict in-hospital mortality for seriously ill patients. "
+        "SUPPORT2 public dataset (9105 patients, 5 US medical centers). "
+        "RL angle: adaptive feature selection under missing data."
+    ),
+    feature_keys=["conditions", "procedures"],
+    label_key="hospdead",
+    feature_dims={"conditions": 200, "procedures": 200},  # updated at load time
+    label_dim=2,
+    primary_metric="auroc",
+    metric_direction="max",
+    metrics=["auroc", "auprc", "f1"],
+    reward_components={"auroc": 1.0},
+    pyhealth_dataset="support2",
+))
+
+TaskRegistry.register(TaskSpec(
+    name="support2_dzclass",
+    task_type="multiclass",
+    description=(
+        "Classify disease category (ARF/MOSF, COPD/CHF/Cirrhosis, Cancer, Coma). "
+        "SUPPORT2 public dataset. RL angle: learning discriminative clinical patterns."
+    ),
+    feature_keys=["conditions", "procedures"],
+    label_key="dzclass",
+    feature_dims={"conditions": 200, "procedures": 200},
+    label_dim=4,
+    primary_metric="f1_macro",
+    metric_direction="max",
+    metrics=["f1_macro", "accuracy", "auroc_macro"],
+    reward_components={"f1_macro": 1.0},
+    pyhealth_dataset="support2",
+))
+
+TaskRegistry.register(TaskSpec(
+    name="support2_survival",
+    task_type="binary",
+    description=(
+        "Predict 2-month survival (surv2m >= 0.5) for seriously ill patients. "
+        "SUPPORT2 public dataset. RL angle: prognosis under uncertainty."
+    ),
+    feature_keys=["conditions", "procedures"],
+    label_key="survival_2m",
+    feature_dims={"conditions": 200, "procedures": 200},
+    label_dim=2,
+    primary_metric="auroc",
+    metric_direction="max",
+    metrics=["auroc", "auprc", "f1"],
+    reward_components={"auroc": 1.0},
+    pyhealth_dataset="support2",
+))
 
 
 def get_ddi_matrix(task_name: str, seed: int = SEED) -> Optional[np.ndarray]:

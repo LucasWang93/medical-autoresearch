@@ -97,13 +97,16 @@ class DrugRecommendationMIMIC3:
 # ============================================================
 
 class TestTaskRegistry(unittest.TestCase):
-    def test_all_four_tasks_registered(self):
+    def test_all_tasks_registered(self):
         names = prepare.TaskRegistry.list_tasks()
         self.assertIn("drug_recommendation", names)
         self.assertIn("mortality_prediction", names)
         self.assertIn("readmission_prediction", names)
         self.assertIn("length_of_stay", names)
-        self.assertEqual(len(names), 4)
+        self.assertIn("support2_mortality", names)
+        self.assertIn("support2_dzclass", names)
+        self.assertIn("support2_survival", names)
+        self.assertEqual(len(names), 7)
 
     def test_get_returns_correct_spec(self):
         spec = prepare.TaskRegistry.get("drug_recommendation")
@@ -117,7 +120,7 @@ class TestTaskRegistry(unittest.TestCase):
 
     def test_select_tasks_all(self):
         specs = prepare.TaskRegistry.select_tasks()
-        self.assertEqual(len(specs), 4)
+        self.assertEqual(len(specs), 7)
 
     def test_select_tasks_subset(self):
         specs = prepare.TaskRegistry.select_tasks(["mortality_prediction", "length_of_stay"])
@@ -828,6 +831,101 @@ class TestComputeRewardEdgeCases(unittest.TestCase):
         )
         reward = prepare.compute_reward({"auroc": 0.9}, spec)
         self.assertAlmostEqual(reward, 0.0)
+
+
+# ============================================================
+# SUPPORT2 Dataset Tests
+# ============================================================
+
+# SUPPORT2 tests download from HuggingFace on first run (~2s).
+# They are skipped if the `datasets` package is not installed.
+
+def _has_datasets_lib():
+    try:
+        import datasets  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@unittest.skipUnless(_has_datasets_lib(), "requires `datasets` package")
+class TestSupport2Tasks(unittest.TestCase):
+    def test_three_tasks_registered(self):
+        names = prepare.TaskRegistry.list_tasks()
+        self.assertIn("support2_mortality", names)
+        self.assertIn("support2_dzclass", names)
+        self.assertIn("support2_survival", names)
+
+    def test_mortality_spec(self):
+        spec = prepare.TaskRegistry.get("support2_mortality")
+        self.assertEqual(spec.task_type, "binary")
+        self.assertEqual(spec.label_key, "hospdead")
+        self.assertEqual(spec.primary_metric, "auroc")
+
+    def test_dzclass_spec(self):
+        spec = prepare.TaskRegistry.get("support2_dzclass")
+        self.assertEqual(spec.task_type, "multiclass")
+        self.assertEqual(spec.label_key, "dzclass")
+        self.assertEqual(spec.label_dim, 4)
+
+    def test_survival_spec(self):
+        spec = prepare.TaskRegistry.get("support2_survival")
+        self.assertEqual(spec.task_type, "binary")
+        self.assertEqual(spec.label_key, "survival_2m")
+
+
+@unittest.skipUnless(_has_datasets_lib(), "requires `datasets` package")
+class TestSupport2DataLoading(unittest.TestCase):
+    """Test SUPPORT2 data loading — downloads data on first run."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Load once, share across tests."""
+        cls.spec, cls.train_dl, cls.val_dl, cls.test_dl = prepare.load_task_data(
+            "support2_mortality", batch_size=8, return_spec=True,
+        )
+
+    def test_split_sizes(self):
+        total = (len(self.train_dl.dataset) + len(self.val_dl.dataset)
+                 + len(self.test_dl.dataset))
+        self.assertEqual(total, 9105)
+        self.assertGreater(len(self.train_dl.dataset), 7000)
+
+    def test_vocab_size_updated(self):
+        self.assertGreater(self.spec.feature_dims["conditions"], 100)
+        self.assertEqual(
+            self.spec.feature_dims["conditions"],
+            self.spec.feature_dims["procedures"],
+        )
+
+    def test_batch_shapes(self):
+        batch = next(iter(self.train_dl))
+        self.assertEqual(batch["conditions"].ndim, 3)
+        self.assertEqual(batch["procedures"].ndim, 3)
+        self.assertEqual(batch["mask"].ndim, 2)
+        self.assertIn(batch["hospdead"].dtype, [torch.long, torch.int64])
+
+    def test_labels_binary(self):
+        batch = next(iter(self.train_dl))
+        labels = batch["hospdead"]
+        self.assertTrue((labels >= 0).all())
+        self.assertTrue((labels <= 1).all())
+
+    def test_dzclass_loading(self):
+        spec = prepare.TaskRegistry.get("support2_dzclass")
+        # Reuse already-downloaded data by building dataset directly
+        ds = prepare.Support2Dataset(spec, seed=42)
+        self.assertGreater(len(ds), 9000)
+        sample = ds[0]
+        self.assertIn("dzclass", sample)
+        self.assertIn(sample["dzclass"], [0, 1, 2, 3])
+
+    def test_survival_loading(self):
+        spec = prepare.TaskRegistry.get("support2_survival")
+        ds = prepare.Support2Dataset(spec, seed=42)
+        sample = ds[0]
+        self.assertIn("survival_2m", sample)
+        self.assertIn(sample["survival_2m"], [0, 1])
 
 
 if __name__ == "__main__":

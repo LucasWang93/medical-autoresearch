@@ -486,5 +486,54 @@ class TestEvaluationMultilabel(unittest.TestCase):
         gc.collect()
 
 
+# ============================================================
+# SUPPORT2 End-to-End Tests
+# ============================================================
+
+def _has_datasets_lib():
+    try:
+        import datasets  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@unittest.skipUnless(_has_datasets_lib(), "requires `datasets` package")
+class TestSupport2Model(unittest.TestCase):
+    """SUPPORT2 model tests. Uses shared data to reduce memory on login nodes."""
+
+    _spec = None
+    _train_dl = None
+    _test_dl = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls._spec, cls._train_dl, _, cls._test_dl = prepare.load_task_data(
+            "support2_mortality", batch_size=8, return_spec=True,
+        )
+
+    def tearDown(self):
+        gc.collect()
+
+    def test_support2_mortality_forward_and_eval(self):
+        model = train.ClinicalRLModel(self._spec)
+        batch = next(iter(self._train_dl))
+        output = model(**batch)
+        self.assertIn("loss", output)
+        self.assertEqual(output["logit"].shape[1], 2)
+
+        # Evaluate on a small subset (first 2 batches) to save memory
+        import itertools
+        small_dl = list(itertools.islice(self._test_dl, 2))
+
+        class _SmallLoader:
+            def __init__(self, batches): self._b = batches
+            def __iter__(self): return iter(self._b)
+
+        metrics = prepare.evaluate_model(model, _SmallLoader(small_dl), self._spec, device="cpu")
+        self.assertIn("auroc", metrics)
+        del model
+
+
 if __name__ == "__main__":
     unittest.main()
