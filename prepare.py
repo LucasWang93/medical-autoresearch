@@ -926,6 +926,17 @@ _SUPPORT2_CATEGORICAL_FEATURES = {
 
 _SUPPORT2_N_BINS = 10  # quantile bins per numeric feature
 
+# Per-task feature exclusions to prevent information leakage.
+# Each key is a task name; values are features to remove from input.
+_SUPPORT2_EXCLUDE = {
+    # dzclass label is derived from dzgroup, so both leak the answer
+    "support2_dzclass": {"dzgroup", "dzclass"},
+    # surv2m is computed from sps; prg2m/prg6m/surv6m are also prognosis scores
+    "support2_survival": {"sps", "surv2m", "surv6m", "prg2m", "prg6m"},
+    # mortality: no leakage, but exclude hospdead (the label) and derived fields
+    "support2_mortality": {"hospdead", "slos"},  # slos = survival LOS, only known post-discharge
+}
+
 
 class Support2Dataset(Dataset):
     """SUPPORT2 public dataset adapted for our framework.
@@ -975,9 +986,22 @@ class Support2Dataset(Dataset):
     ) -> Tuple[int, List[Dict[str, Any]]]:
         """Discretize raw SUPPORT2 rows into our sample format."""
 
+        # 0. Determine which features to exclude for this task
+        exclude = _SUPPORT2_EXCLUDE.get(spec.name, set())
+
+        # Build filtered feature groups
+        num_features = {
+            group: [f for f in feats if f not in exclude]
+            for group, feats in _SUPPORT2_NUMERIC_FEATURES.items()
+        }
+        cat_features = {
+            group: [f for f in feats if f not in exclude]
+            for group, feats in _SUPPORT2_CATEGORICAL_FEATURES.items()
+        }
+
         # 1. Compute quantile bin edges for each numeric feature
         bin_edges: Dict[str, np.ndarray] = {}
-        for group_features in _SUPPORT2_NUMERIC_FEATURES.values():
+        for group_features in num_features.values():
             for feat in group_features:
                 vals = [r[feat] for r in raw if r.get(feat) is not None]
                 if vals:
@@ -988,7 +1012,7 @@ class Support2Dataset(Dataset):
 
         # 2. Build categorical vocabularies
         cat_vocabs: Dict[str, Dict[Any, int]] = {}
-        for group_features in _SUPPORT2_CATEGORICAL_FEATURES.values():
+        for group_features in cat_features.values():
             for feat in group_features:
                 unique = sorted({str(r.get(feat, "missing")) for r in raw})
                 cat_vocabs[feat] = {v: i + 1 for i, v in enumerate(unique)}
@@ -996,11 +1020,11 @@ class Support2Dataset(Dataset):
         # 3. Compute vocab size: sum of all bins + all cat values + 1 (padding)
         offset = 1  # 0 = padding
         feat_offset: Dict[str, int] = {}
-        for group_features in _SUPPORT2_NUMERIC_FEATURES.values():
+        for group_features in num_features.values():
             for feat in group_features:
                 feat_offset[feat] = offset
                 offset += _SUPPORT2_N_BINS
-        for group_features in _SUPPORT2_CATEGORICAL_FEATURES.values():
+        for group_features in cat_features.values():
             for feat in group_features:
                 feat_offset[feat] = offset
                 offset += len(cat_vocabs.get(feat, {}))
@@ -1015,7 +1039,7 @@ class Support2Dataset(Dataset):
             all_visits: List[List[int]] = []
 
             # Numeric feature groups → one visit each
-            for group_name, group_features in _SUPPORT2_NUMERIC_FEATURES.items():
+            for group_name, group_features in num_features.items():
                 codes = []
                 for feat in group_features:
                     val = row.get(feat)
@@ -1028,7 +1052,7 @@ class Support2Dataset(Dataset):
                 all_visits.append(codes)
 
             # Categorical feature group → one visit
-            for group_name, group_features in _SUPPORT2_CATEGORICAL_FEATURES.items():
+            for group_name, group_features in cat_features.items():
                 codes = []
                 for feat in group_features:
                     val = str(row.get(feat, "missing"))
