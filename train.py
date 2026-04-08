@@ -46,14 +46,15 @@ DROPOUT = 0.3
 # RL hyperparameters
 GAMMA = 0.95          # discount factor for delayed rewards
 ENTROPY_COEF = 0.01   # exploration bonus
-VALUE_LOSS_COEF = 0.5 # value network weight
+VALUE_LOSS_COEF = 0.1 # value network weight (reduced from 0.5 — RL loss was dominating)
 USE_BASELINE = True   # variance reduction
 N_ACTIONS = 10        # history window for agent attention
+RL_LOSS_COEF = 0.1    # scale RL loss relative to task loss
 
 # Optimization
 LR = 1e-3
 WEIGHT_DECAY = 1e-5
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 MAX_GRAD_NORM = 1.0
 
 # Reproducibility
@@ -278,7 +279,7 @@ class ClinicalRLModel(nn.Module):
                 task_loss.detach(), y_true, logit.detach(),
             )
 
-            result["loss"] = task_loss + rl_loss
+            result["loss"] = task_loss + RL_LOSS_COEF * rl_loss
             result["task_loss"] = task_loss.detach()
             result["rl_loss"] = rl_loss.detach()
 
