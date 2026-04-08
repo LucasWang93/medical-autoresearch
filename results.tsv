@@ -14,3 +14,4 @@ a314450	7601442	0.166126	0.166126	0.4	keep	mimic4_drugrec	baseline REINFORCE, 12
 0e90b6a	7683544	0.517425	0.011113	1.3	keep	mimic4_los	iter3: RL_LOSS_COEF=0.1 + VALUE_LOSS_COEF=0.1 + batch128 (3 epochs)
 beb7ee5	7684150	0.528500	0.011075	1.4	keep	mimic4_los	iter4: hidden256 + 2-layer GRU + 900s (4 epochs, 1M params)
 921acca	7685153	0.528211	-0.000289	1.4	revert	mimic4_los	iter5: focal loss gamma=2 + LR 2e-3 — no improvement, reverted
+e04e777	7685951	0.511302	-0.017198	2.3	revert	mimic4_los	iter6: embed256 + label smoothing + OneCycleLR — worse, reverted
