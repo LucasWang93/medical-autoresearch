@@ -35,7 +35,7 @@ from prepare import (
 # ============================================================
 
 # Task selection (single task for MVP; multi-task interface is available)
-TASK_NAME = "drug_recommendation"
+TASK_NAME = "mimic4_los"
 
 # Model architecture
 EMBEDDING_DIM = 128
@@ -427,6 +427,9 @@ def main(argv: Optional[List[str]] = None):
     optimizer = torch.optim.Adam(
         model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY,
     )
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", factor=0.5, patience=2, verbose=False,
+    )
 
     # ---- Training loop with time budget ----
     total_start = time.time()
@@ -478,8 +481,7 @@ def main(argv: Optional[List[str]] = None):
         avg_task = epoch_task_loss / n_batches
         avg_rl = epoch_rl_loss / n_batches
 
-        # Validate periodically
-        if epoch % 2 == 0 or time.time() - training_start >= time_budget:
+        # Validate every epoch
             val_metrics = evaluate_model(model, val_loader, task_spec, device)
             score = val_metrics.get(task_spec.primary_metric, 0.0)
 
@@ -490,6 +492,8 @@ def main(argv: Optional[List[str]] = None):
             if is_better:
                 best_score = score
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+
+            scheduler.step(score)
 
             elapsed = time.time() - training_start
             print(
