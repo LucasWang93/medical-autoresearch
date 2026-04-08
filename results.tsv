@@ -12,3 +12,4 @@ a314450	7601442	0.166126	0.166126	0.4	keep	mimic4_drugrec	baseline REINFORCE, 12
 2a50e34	7648515	0.491888	0.010480	0.3	keep	mimic4_los	iter1: LR scheduler + 300s budget + epoch-level val (baseline 0.481)
 540d81f	7682678	0.506312	0.014424	0.6	keep	mimic4_los	iter2: class-weighted CE + batch64 + 600s (2 epochs)
 0e90b6a	7683544	0.517425	0.011113	1.3	keep	mimic4_los	iter3: RL_LOSS_COEF=0.1 + VALUE_LOSS_COEF=0.1 + batch128 (3 epochs)
+beb7ee5	7684150	0.528500	0.011075	1.4	keep	mimic4_los	iter4: hidden256 + 2-layer GRU + 900s (4 epochs, 1M params)
