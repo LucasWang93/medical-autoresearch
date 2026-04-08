@@ -428,7 +428,7 @@ def main(argv: Optional[List[str]] = None):
         model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY,
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=2, verbose=False,
+        optimizer, mode="max", factor=0.5, patience=2,
     )
 
     # ---- Training loop with time budget ----
