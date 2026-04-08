@@ -7,11 +7,12 @@ The system iterates autonomously: modify model → submit GPU job → evaluate �
 ## Project Structure
 
 ```
-├── prepare.py          # FIXED: task registry, synthetic EHR data, PyHealth loader, evaluation harness
+├── prepare.py          # FIXED: task registry, data loaders (synthetic/SUPPORT2/MIMIC-IV), evaluation
 ├── train.py            # AGENT MODIFIES: RL model, reward shaping, training loop
 ├── program.md          # Autonomous experiment loop instructions for Claude Code
+├── BASELINES.md        # Baseline results, model architecture, analysis
 ├── scripts/run.sh      # Slurm GPU job launcher
-├── tests/              # 112 unit tests
+├── tests/              # Unit tests (prepare + train)
 │   ├── test_prepare.py
 │   └── test_train.py
 ├── results/            # Experiment logs (run_<JOBID>.log)
@@ -20,14 +21,32 @@ The system iterates autonomously: modify model → submit GPU job → evaluate �
 └── pyproject.toml
 ```
 
-## Available Tasks
+## Available Tasks (11 total)
 
-| Task | Type | Primary Metric | Description |
-|------|------|---------------|-------------|
-| `drug_recommendation` | multilabel | jaccard_samples | Drug combination prediction with DDI safety |
-| `mortality_prediction` | binary | auroc | In-hospital mortality from visit history |
-| `readmission_prediction` | binary | auroc | 30-day readmission prediction |
-| `length_of_stay` | multiclass | f1_macro | LOS bucket (short/medium/long) |
+### MIMIC-IV Real Data (223K patients)
+| Task | Type | Metric | Baseline |
+|------|------|--------|----------|
+| `mimic4_mortality` | binary | AUROC | 0.961 |
+| `mimic4_readmission` | binary | AUROC | 0.669 |
+| `mimic4_los` | 4-class | F1_macro | 0.481 |
+| `mimic4_drugrec` | multilabel | Jaccard | 0.166 |
+
+### SUPPORT2 Real Data (9K patients)
+| Task | Type | Metric | Baseline |
+|------|------|--------|----------|
+| `support2_mortality` | binary | AUROC | 0.916 |
+| `support2_dzclass` | 4-class | F1_macro | 0.779 |
+| `support2_survival` | binary | AUROC | 0.936 |
+
+### Synthetic Data (development)
+| Task | Type | Metric | Baseline |
+|------|------|--------|----------|
+| `drug_recommendation` | multilabel | Jaccard | 0.654 |
+| `mortality_prediction` | binary | AUROC | — |
+| `readmission_prediction` | binary | AUROC | — |
+| `length_of_stay` | multiclass | F1_macro | — |
+
+See [BASELINES.md](BASELINES.md) for detailed model architecture, training setup, and analysis.
 
 ## Quick Start
 
@@ -81,13 +100,23 @@ tail -20 results/run_<JOBID>.log
 tail -50 results/run_<JOBID>.log
 ```
 
-### Real MIMIC Data (via PyHealth)
+### MIMIC-IV Tasks (real data, auto-detected)
 
 ```bash
-python train.py --use-pyhealth --data-root /path/to/mimiciii
+# MIMIC-IV tasks auto-detect local data at the configured path
+sbatch --partition=gpu --time=00:20:00 scripts/run.sh --task mimic4_mortality --time-budget 120
+
+# Run all MIMIC-IV baselines
+for task in mimic4_mortality mimic4_readmission mimic4_los mimic4_drugrec; do
+  sbatch --partition=gpu --time=00:20:00 scripts/run.sh --task $task --time-budget 120
+done
 ```
 
-Falls back to synthetic data if PyHealth loading fails.
+### SUPPORT2 Tasks (auto-downloads from HuggingFace)
+
+```bash
+sbatch scripts/run.sh --task support2_mortality --time-budget 120
+```
 
 ## CLI Arguments
 
@@ -103,27 +132,16 @@ Falls back to synthetic data if PyHealth loading fails.
 ## Tests
 
 ```bash
-# Run all 112 tests (~100s)
+# Run all tests (may OOM on login node — run file-by-file if needed)
 python -m unittest discover -s tests
 
-# Run specific test file
+# Run by file (recommended on login nodes)
 python -m unittest tests.test_prepare -v
 python -m unittest tests.test_train -v
-```
 
-Coverage:
-- Task registry, all 4 task specs
-- Reward computation, metric calculation, DDI rate
-- Synthetic data generation (all task types)
-- Collation and padding
-- PyHealth data normalization
-- Multi-task loader (round_robin, bandit, proportional)
-- Model components (CodeEmbedding, PolicyAgent, ClinicalRLModel)
-- Forward pass for all task types + edge cases
-- RL loss computation
-- Reward shaping
-- End-to-end evaluation
-- CLI argument parsing
+# Run only MIMIC-IV tests
+python -m unittest tests.test_prepare.TestMIMIC4Tasks tests.test_prepare.TestMIMIC4DataLoading -v
+```
 
 ## Autonomous Experiment Loop
 
@@ -163,14 +181,6 @@ Account: `pi_yz875`
 ## Dependencies
 
 - System module: `PyTorch/2.7.1-foss-2024a-CUDA-12.6.0`
-- pip: `scikit-learn` (auto-installed by run.sh)
-- Optional: `pyhealth` (for real MIMIC data)
-
-## Current Baseline
-
-| Task | Metric | Score | Job |
-|------|--------|-------|-----|
-| drug_recommendation | jaccard_samples | 0.654 | 7439080 |
-| mortality_prediction | auroc | — | pending |
-| readmission_prediction | auroc | — | pending |
-| length_of_stay | f1_macro | — | pending |
+- pip: `scikit-learn datasets pandas` (auto-installed by run.sh)
+- MIMIC-IV 3.1 data (for `mimic4_*` tasks, local access required)
+- SUPPORT2 data (for `support2_*` tasks, auto-downloaded from HuggingFace)
