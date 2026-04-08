@@ -52,13 +52,29 @@ N_ACTIONS = 10        # history window for agent attention
 RL_LOSS_COEF = 0.1    # scale RL loss relative to task loss
 
 # Optimization
-LR = 1e-3
+LR = 2e-3
 WEIGHT_DECAY = 1e-5
 BATCH_SIZE = 128
 MAX_GRAD_NORM = 1.0
 
 # Reproducibility
 SEED = 42
+
+
+# ============================================================
+# Loss Functions
+# ============================================================
+
+def focal_loss(logit, target, weight=None, gamma=2.0):
+    """Focal loss for multiclass classification.
+
+    Down-weights easy examples, focuses on hard ones.
+    """
+    ce = F.cross_entropy(logit, target, weight=weight, reduction='none')
+    p = torch.softmax(logit, dim=-1)
+    p_t = p.gather(1, target.unsqueeze(1)).squeeze(1)
+    focal_weight = (1 - p_t) ** gamma
+    return (focal_weight * ce).mean()
 
 
 # ============================================================
@@ -270,7 +286,7 @@ class ClinicalRLModel(nn.Module):
                 task_loss = F.cross_entropy(logit, y_true)
                 result["y_prob"] = F.softmax(logit, dim=-1)[:, 1]
             elif self.task_type == "multiclass":
-                task_loss = F.cross_entropy(logit, y_true, weight=self.class_weights)
+                task_loss = focal_loss(logit, y_true, weight=self.class_weights, gamma=2.0)
                 result["y_prob"] = F.softmax(logit, dim=-1)
 
             # RL loss (REINFORCE with baseline)
