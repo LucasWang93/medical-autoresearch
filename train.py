@@ -53,7 +53,7 @@ N_ACTIONS = 10        # history window for agent attention
 # Optimization
 LR = 1e-3
 WEIGHT_DECAY = 1e-5
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 MAX_GRAD_NORM = 1.0
 
 # Reproducibility
@@ -144,11 +144,12 @@ class ClinicalRLModel(nn.Module):
 
     The agent can modify any part of this architecture.
     """
-    def __init__(self, task_spec: TaskSpec):
+    def __init__(self, task_spec: TaskSpec, class_weights=None):
         super().__init__()
         self.spec = task_spec
         self.task_type = task_spec.task_type
         self.label_key = task_spec.label_key
+        self.class_weights = class_weights
 
         # Embeddings for each feature type
         self.embeddings = nn.ModuleDict()
@@ -268,7 +269,7 @@ class ClinicalRLModel(nn.Module):
                 task_loss = F.cross_entropy(logit, y_true)
                 result["y_prob"] = F.softmax(logit, dim=-1)[:, 1]
             elif self.task_type == "multiclass":
-                task_loss = F.cross_entropy(logit, y_true)
+                task_loss = F.cross_entropy(logit, y_true, weight=self.class_weights)
                 result["y_prob"] = F.softmax(logit, dim=-1)
 
             # RL loss (REINFORCE with baseline)
@@ -419,8 +420,28 @@ def main(argv: Optional[List[str]] = None):
 
     ddi_matrix = get_ddi_matrix(task_name) if task_name == "drug_recommendation" else None
 
+    # ---- Compute class weights for imbalanced multiclass tasks ----
+    class_weights = None
+    if task_spec.task_type == "multiclass":
+        from collections import Counter
+        label_key = task_spec.label_key
+        all_labels = []
+        for batch in train_loader:
+            all_labels.append(batch[label_key].numpy())
+        all_labels = np.concatenate(all_labels)
+        counts = Counter(all_labels.tolist())
+        n_classes = task_spec.label_dim
+        total = len(all_labels)
+        # Inverse frequency weighting
+        weights = torch.zeros(n_classes)
+        for c in range(n_classes):
+            weights[c] = total / (n_classes * max(counts.get(c, 1), 1))
+        class_weights = weights.to(device)
+        print(f"[train] Class distribution: {dict(sorted(counts.items()))}")
+        print(f"[train] Class weights: {weights.tolist()}")
+
     # ---- Build model ----
-    model = ClinicalRLModel(task_spec).to(device)
+    model = ClinicalRLModel(task_spec, class_weights=class_weights).to(device)
     n_params = count_parameters(model)
     print(f"[train] Model parameters: {n_params:,}")
 
