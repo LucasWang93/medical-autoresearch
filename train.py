@@ -482,26 +482,26 @@ def main(argv: Optional[List[str]] = None):
         avg_rl = epoch_rl_loss / n_batches
 
         # Validate every epoch
-            val_metrics = evaluate_model(model, val_loader, task_spec, device)
-            score = val_metrics.get(task_spec.primary_metric, 0.0)
+        val_metrics = evaluate_model(model, val_loader, task_spec, device)
+        score = val_metrics.get(task_spec.primary_metric, 0.0)
 
-            is_better = (
-                (score > best_score) if task_spec.metric_direction == "max"
-                else (score < best_score)
-            )
-            if is_better:
-                best_score = score
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+        is_better = (
+            (score > best_score) if task_spec.metric_direction == "max"
+            else (score < best_score)
+        )
+        if is_better:
+            best_score = score
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
-            scheduler.step(score)
+        scheduler.step(score)
 
-            elapsed = time.time() - training_start
-            print(
-                f"[train] Epoch {epoch:3d} | loss {avg_loss:.4f} "
-                f"(task {avg_task:.4f} + rl {avg_rl:.4f}) | "
-                f"val_{task_spec.primary_metric} {score:.4f} | "
-                f"best {best_score:.4f} | {elapsed:.0f}s/{time_budget}s"
-            )
+        elapsed = time.time() - training_start
+        print(
+            f"[train] Epoch {epoch:3d} | loss {avg_loss:.4f} "
+            f"(task {avg_task:.4f} + rl {avg_rl:.4f}) | "
+            f"val_{task_spec.primary_metric} {score:.4f} | "
+            f"best {best_score:.4f} | {elapsed:.0f}s/{time_budget}s"
+        )
 
     training_seconds = time.time() - training_start
 
