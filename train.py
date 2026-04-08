@@ -54,7 +54,7 @@ RL_LOSS_COEF = 0.1    # scale RL loss relative to task loss
 # Optimization
 LR = 1e-3
 WEIGHT_DECAY = 1e-5
-BATCH_SIZE = 256
+BATCH_SIZE = 128
 MAX_GRAD_NORM = 1.0
 
 # Reproducibility
