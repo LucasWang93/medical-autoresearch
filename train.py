@@ -38,7 +38,7 @@ from prepare import (
 TASK_NAME = "mimic4_los"
 
 # Model architecture
-EMBEDDING_DIM = 256
+EMBEDDING_DIM = 128
 HIDDEN_DIM = 256
 NUM_RNN_LAYERS = 2
 DROPOUT = 0.3
@@ -270,7 +270,7 @@ class ClinicalRLModel(nn.Module):
                 task_loss = F.cross_entropy(logit, y_true)
                 result["y_prob"] = F.softmax(logit, dim=-1)[:, 1]
             elif self.task_type == "multiclass":
-                task_loss = F.cross_entropy(logit, y_true, weight=self.class_weights, label_smoothing=0.1)
+                task_loss = F.cross_entropy(logit, y_true, weight=self.class_weights)
                 result["y_prob"] = F.softmax(logit, dim=-1)
 
             # RL loss (REINFORCE with baseline)
@@ -449,12 +449,8 @@ def main(argv: Optional[List[str]] = None):
     optimizer = torch.optim.Adam(
         model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY,
     )
-    # OneCycleLR: warmup + cosine decay within estimated steps
-    # Estimate ~2016 steps/epoch (258K / 128), ~4 epochs = ~8064 total
-    est_steps = (len(train_loader.dataset) // batch_size + 1) * 5
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=LR * 3, total_steps=est_steps,
-        pct_start=0.1, anneal_strategy='cos',
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", factor=0.5, patience=2,
     )
 
     # ---- Training loop with time budget ----
@@ -492,8 +488,6 @@ def main(argv: Optional[List[str]] = None):
                     model.parameters(), MAX_GRAD_NORM,
                 )
             optimizer.step()
-            if step < est_steps:
-                scheduler.step()
 
             epoch_loss += loss.item()
             epoch_task_loss += output.get("task_loss", loss).item()
@@ -520,6 +514,8 @@ def main(argv: Optional[List[str]] = None):
         if is_better:
             best_score = score
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+
+        scheduler.step(score)
 
         elapsed = time.time() - training_start
         print(
