@@ -9,3 +9,4 @@ a314450	7601425	0.961109	0.961109	0.2	keep	mimic4_mortality	baseline REINFORCE, 
 a314450	7601440	0.668758	0.668758	0.2	keep	mimic4_readmission	baseline REINFORCE, 120s, 223452 real patients (MIMIC-IV 3.1)
 a314450	7601441	0.481408	0.481408	0.2	keep	mimic4_los	baseline REINFORCE, 120s, 223452 real patients (MIMIC-IV 3.1)
 a314450	7601442	0.166126	0.166126	0.4	keep	mimic4_drugrec	baseline REINFORCE, 120s, 223452 real patients (MIMIC-IV 3.1)
+2a50e34	7648515	0.491888	0.010480	0.3	keep	mimic4_los	iter1: LR scheduler + 300s budget + epoch-level val (baseline 0.481)
