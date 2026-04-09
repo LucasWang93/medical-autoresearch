@@ -183,11 +183,6 @@ class ClinicalRLModel(nn.Module):
             nn.Dropout(DROPOUT),
         )
 
-        # Temporal attention: soft attention over all visit states
-        self.attn_query = nn.Linear(HIDDEN_DIM, HIDDEN_DIM)
-        self.attn_key = nn.Linear(HIDDEN_DIM, HIDDEN_DIM)
-        self.attn_out = nn.Linear(HIDDEN_DIM * 2, HIDDEN_DIM)
-
         # Task-specific output head
         if task_spec.task_type == "multilabel":
             self.output_head = nn.Linear(HIDDEN_DIM, task_spec.label_dim)
@@ -248,7 +243,7 @@ class ClinicalRLModel(nn.Module):
 
         fused_seq = torch.stack(fused_states, dim=1)  # [batch, visits, hidden]
 
-        # 4. Get last valid state + attention-pooled state
+        # 4. Get last valid state for prediction
         if mask is not None:
             lengths = mask.long().sum(dim=1).clamp(min=1) - 1
             last_state = fused_seq[
@@ -257,18 +252,8 @@ class ClinicalRLModel(nn.Module):
         else:
             last_state = fused_seq[:, -1, :]
 
-        # 4b. Temporal attention: last state queries all fused states
-        query = self.attn_query(last_state).unsqueeze(1)  # [B, 1, H]
-        keys = self.attn_key(fused_seq)  # [B, T, H]
-        attn_scores = (query * keys).sum(dim=-1) / (HIDDEN_DIM ** 0.5)  # [B, T]
-        if mask is not None:
-            attn_scores = attn_scores.masked_fill(~mask.bool(), float('-inf'))
-        attn_weights = F.softmax(attn_scores, dim=-1)  # [B, T]
-        attn_pooled = (attn_weights.unsqueeze(-1) * fused_seq).sum(dim=1)  # [B, H]
-        combined = self.attn_out(torch.cat([last_state, attn_pooled], dim=-1))
-
         # 5. Predict
-        logit = self.output_head(combined)
+        logit = self.output_head(last_state)
 
         # 6. Compute loss
         result = {"logit": logit}
