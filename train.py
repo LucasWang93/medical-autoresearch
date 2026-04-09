@@ -41,7 +41,7 @@ TASK_NAME = "mimic4_los"
 EMBEDDING_DIM = 128
 HIDDEN_DIM = 256
 NUM_RNN_LAYERS = 2
-DROPOUT = 0.4
+DROPOUT = 0.3
 
 # RL hyperparameters
 RL_ALGO = "a2c_gae"    # reinforce | ppo | a2c_gae | dqn
@@ -77,7 +77,7 @@ BATCH_SIZE = 128
 MAX_GRAD_NORM = 1.0
 
 # Input augmentation
-CODE_MASK_RATE = 0.15 # randomly zero out 15% of medical codes during training
+CODE_MASK_RATE = 0.1  # randomly zero out 10% of medical codes during training
 
 # Reproducibility
 SEED = 42
@@ -295,6 +295,11 @@ class ClinicalRLModel(nn.Module):
             nn.Dropout(DROPOUT),
         )
 
+        # Attention pooling for final representation
+        self.attn_pool = nn.Sequential(
+            nn.Linear(HIDDEN_DIM, 1),
+        )
+
         # Task-specific output head
         self.use_ordinal = (task_spec.task_type == "multiclass" and USE_ORDINAL)
         if task_spec.task_type == "multilabel":
@@ -371,14 +376,12 @@ class ClinicalRLModel(nn.Module):
 
         fused_seq = torch.stack(fused_states, dim=1)  # [batch, visits, hidden]
 
-        # 4. Get last valid state for prediction
+        # 4. Attention-weighted pooling over all valid time steps
+        attn_scores = self.attn_pool(fused_seq).squeeze(-1)  # [batch, visits]
         if mask is not None:
-            lengths = mask.long().sum(dim=1).clamp(min=1) - 1
-            last_state = fused_seq[
-                torch.arange(batch_size, device=device), lengths
-            ]
-        else:
-            last_state = fused_seq[:, -1, :]
+            attn_scores = attn_scores.masked_fill(~mask.bool(), float("-inf"))
+        attn_weights = F.softmax(attn_scores, dim=-1)  # [batch, visits]
+        last_state = (attn_weights.unsqueeze(-1) * fused_seq).sum(dim=1)  # [batch, hidden]
 
         # 5. Predict
         logit = self.output_head(last_state)
