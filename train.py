@@ -66,6 +66,9 @@ DQN_EPS_DECAY = 0.995 # per-epoch decay
 DQN_REPLAY_SIZE = 10000
 DQN_TARGET_UPDATE = 5  # update target network every N epochs
 
+# Ordinal regression (for multiclass tasks with ordered labels like LOS)
+USE_ORDINAL = True
+
 # Optimization
 LR = 1e-3
 WEIGHT_DECAY = 1e-5
@@ -285,12 +288,19 @@ class ClinicalRLModel(nn.Module):
         )
 
         # Task-specific output head
+        self.use_ordinal = (task_spec.task_type == "multiclass" and USE_ORDINAL)
         if task_spec.task_type == "multilabel":
             self.output_head = nn.Linear(HIDDEN_DIM, task_spec.label_dim)
         elif task_spec.task_type == "binary":
             self.output_head = nn.Linear(HIDDEN_DIM, 2)
         elif task_spec.task_type == "multiclass":
-            self.output_head = nn.Linear(HIDDEN_DIM, task_spec.label_dim)
+            if self.use_ordinal:
+                # Ordinal regression: K-1 cumulative thresholds
+                n_thresholds = task_spec.label_dim - 1
+                self.output_head = nn.Linear(HIDDEN_DIM, 1)  # shared latent
+                self.thresholds = nn.Parameter(torch.linspace(-1, 1, n_thresholds))
+            else:
+                self.output_head = nn.Linear(HIDDEN_DIM, task_spec.label_dim)
 
     def forward(self, **kwargs) -> Dict[str, torch.Tensor]:
         device = next(self.parameters()).device
@@ -379,6 +389,27 @@ class ClinicalRLModel(nn.Module):
             elif self.task_type == "binary":
                 task_loss = F.cross_entropy(logit, y_true)
                 result["y_prob"] = F.softmax(logit, dim=-1)[:, 1]
+            elif self.task_type == "multiclass" and self.use_ordinal:
+                # Ordinal regression: cumulative logits → class probabilities
+                # logit is [batch, 1], thresholds are [K-1]
+                latent = logit.squeeze(-1)  # [batch]
+                # Cumulative probabilities: P(Y > k) = sigmoid(latent - threshold_k)
+                sorted_thresh, _ = torch.sort(self.thresholds)
+                cum_probs = torch.sigmoid(
+                    latent.unsqueeze(-1) - sorted_thresh.unsqueeze(0)
+                )  # [batch, K-1]
+                # Convert cumulative to class probs: P(Y=k) = P(Y>k-1) - P(Y>k)
+                ones = torch.ones(cum_probs.shape[0], 1, device=cum_probs.device)
+                zeros = torch.zeros(cum_probs.shape[0], 1, device=cum_probs.device)
+                cum_full = torch.cat([ones, cum_probs, zeros], dim=-1)  # [batch, K+1]
+                class_probs = cum_full[:, :-1] - cum_full[:, 1:]  # [batch, K]
+                class_probs = class_probs.clamp(min=1e-7)
+                # NLL loss
+                task_loss = F.nll_loss(
+                    class_probs.log(), y_true, weight=self.class_weights,
+                )
+                result["y_prob"] = class_probs
+                result["logit"] = class_probs.log()  # for RL reward computation
             elif self.task_type == "multiclass":
                 task_loss = F.cross_entropy(logit, y_true, weight=self.class_weights)
                 result["y_prob"] = F.softmax(logit, dim=-1)
