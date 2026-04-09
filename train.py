@@ -76,7 +76,7 @@ BATCH_SIZE = 128
 MAX_GRAD_NORM = 1.0
 
 # Input augmentation
-CODE_MASK_RATE = 0.2  # randomly zero out 20% of medical codes during training
+CODE_MASK_RATE = 0.1  # randomly zero out 10% of medical codes during training
 
 # Reproducibility
 SEED = 42
@@ -264,9 +264,9 @@ class ClinicalRLModel(nn.Module):
             vocab = task_spec.feature_dims.get(key, 500)
             self.embeddings[key] = CodeEmbedding(vocab, EMBEDDING_DIM, DROPOUT)
 
-        # Sequence encoder (LSTM for better long-range memory via cell state)
+        # Sequence encoder
         input_dim = EMBEDDING_DIM * len(task_spec.feature_keys)
-        self.rnn = nn.LSTM(
+        self.rnn = nn.GRU(
             input_size=input_dim,
             hidden_size=HIDDEN_DIM,
             num_layers=NUM_RNN_LAYERS,
@@ -321,7 +321,7 @@ class ClinicalRLModel(nn.Module):
 
         mask = kwargs.get("mask")  # [batch, visits]
 
-        # 2. Encode with RNN (LSTM returns output, (h_n, c_n))
+        # 2. Encode with RNN
         rnn_out, _ = self.rnn(x)  # [batch, visits, hidden_dim]
         batch_size, seq_len, hidden_dim = rnn_out.shape
 
@@ -715,10 +715,10 @@ def main(argv: Optional[List[str]] = None):
         counts = Counter(all_labels.tolist())
         n_classes = task_spec.label_dim
         total = len(all_labels)
-        # Inverse frequency weighting
+        # Sqrt inverse frequency weighting (less extreme than linear)
         weights = torch.zeros(n_classes)
         for c in range(n_classes):
-            weights[c] = total / (n_classes * max(counts.get(c, 1), 1))
+            weights[c] = (total / (n_classes * max(counts.get(c, 1), 1))) ** 0.5
         class_weights = weights.to(device)
         print(f"[train] Class distribution: {dict(sorted(counts.items()))}")
         print(f"[train] Class weights: {weights.tolist()}")
