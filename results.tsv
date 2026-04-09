@@ -18,3 +18,7 @@ e04e777	7685951	0.511302	-0.017198	2.3	revert	mimic4_los	iter6: embed256 + label
 37c2ddc	7687356	0.524374	-0.004126	2.8	revert	mimic4_los	iter7: batch256 for more epochs — worse, reverted
 a913813	7689394	0.516272	-0.012228	1.5	revert	mimic4_los	iter8: temporal attention pooling — worse, reverted
 e634f93	7690581	0.528145	-0.000355	1.4	revert	mimic4_los	iter9: dropout 0.3→0.1 — no improvement, reverted
+3ae639a	7757180	0.528389	-0.000111	1.4	ref	mimic4_los	RL-algo comparison: REINFORCE (baseline re-run)
+3ae639a	7757181	0.528253	-0.000247	1.4	ref	mimic4_los	RL-algo comparison: PPO (clip_eps=0.2)
+3ae639a	7757182	0.530062	0.001562	1.4	keep	mimic4_los	RL-algo comparison: A2C-GAE (lambda=0.95) — NEW BEST
+30f48f2	7757430	0.521302	-0.007198	1.6	ref	mimic4_los	RL-algo comparison: DQN (Double DQN + replay buffer)

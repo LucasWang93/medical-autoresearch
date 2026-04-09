@@ -44,13 +44,13 @@ NUM_RNN_LAYERS = 2
 DROPOUT = 0.3
 
 # RL hyperparameters
-RL_ALGO = "reinforce"  # reinforce | ppo | a2c_gae | dqn
+RL_ALGO = "a2c_gae"    # reinforce | ppo | a2c_gae | dqn
 GAMMA = 0.95          # discount factor for delayed rewards
 ENTROPY_COEF = 0.01   # exploration bonus
 VALUE_LOSS_COEF = 0.1 # value network weight (reduced from 0.5 — RL loss was dominating)
 USE_BASELINE = True   # variance reduction
 N_ACTIONS = 10        # history window for agent attention
-RL_LOSS_COEF = 0.1    # scale RL loss relative to task loss
+RL_LOSS_COEF = 0.5    # scale RL loss relative to task loss (increased: A2C-GAE loss is well-calibrated)
 
 # PPO-specific
 PPO_CLIP_EPS = 0.2    # clipping epsilon
@@ -396,13 +396,23 @@ class ClinicalRLModel(nn.Module):
         return result
 
     def _compute_reward(self, logit: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
-        """Compute per-sample reward from prediction quality."""
+        """Compute per-sample reward from prediction quality.
+
+        For multiclass (LOS): ordinal-aware reward — closer predictions
+        get partial credit (e.g., predicting 3-7d when true is 7-14d = 0.67).
+        """
         with torch.no_grad():
             if self.task_type == "multilabel":
                 y_pred = (torch.sigmoid(logit) > 0.5).float()
                 intersection = (y_pred * y_true).sum(dim=-1)
                 union = ((y_pred + y_true) > 0).float().sum(dim=-1)
                 return intersection / union.clamp(min=1)
+            elif self.task_type == "multiclass":
+                pred_class = logit.argmax(dim=-1)
+                n_classes = logit.shape[-1]
+                distance = (pred_class - y_true).abs().float()
+                # Reward: 1.0 for exact, decays linearly with distance
+                return 1.0 - distance / max(n_classes - 1, 1)
             else:
                 pred_class = logit.argmax(dim=-1)
                 return (pred_class == y_true).float()
