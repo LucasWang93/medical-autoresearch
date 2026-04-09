@@ -30,3 +30,6 @@ bec7ee6	7761937	0.508965	-0.021419	1.4	revert	mimic4_los	iter13: self-attention 
 261d479	7765968	0.972598	0.011489	1.4	keep	mimic4_mortality	A2C-GAE config: AUROC 0.961→0.973 (+0.012)
 261d479	7775162	0.698087	0.029329	1.4	keep	mimic4_readmission	A2C-GAE config: AUROC 0.669→0.698 (+0.029)
 261d479	7777392	0.205161	0.039035	1.4	keep	mimic4_drugrec	A2C-GAE config: Jaccard 0.166→0.205 (+0.039)
+4ab6ca8	7782116	0.523258	-0.007126	1.4	revert	mimic4_los	iter14: EMA decay=0.999 — smoothed too aggressively, reverted
+2c6b2b1	7783320	0.502269	-0.028115	1.4	revert	mimic4_los	iter15: LSTM + code masking 20% — worse, reverted
+0bd508e	7784301	0.544088	0.013704	1.4	keep	mimic4_los	iter16: code masking 10% + sqrt class weights — NEW BEST
