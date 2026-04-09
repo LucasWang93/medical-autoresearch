@@ -267,6 +267,12 @@ class ClinicalRLModel(nn.Module):
             dropout=DROPOUT if NUM_RNN_LAYERS > 1 else 0,
         )
 
+        # Self-attention layer after GRU for cross-visit interactions
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim=HIDDEN_DIM, num_heads=4, dropout=DROPOUT, batch_first=True,
+        )
+        self.attn_norm = nn.LayerNorm(HIDDEN_DIM)
+
         # RL agent for history selection
         self.rl_agent = PolicyAgent(
             obs_dim=HIDDEN_DIM,
@@ -316,6 +322,18 @@ class ClinicalRLModel(nn.Module):
 
         # 2. Encode with RNN
         rnn_out, _ = self.rnn(x)  # [batch, visits, hidden_dim]
+
+        # 2b. Self-attention for cross-visit interactions (residual connection)
+        attn_mask = None
+        if mask is not None:
+            # Create attention mask: True = ignore
+            attn_mask = ~mask.bool()
+        attn_out, _ = self.self_attn(
+            rnn_out, rnn_out, rnn_out,
+            key_padding_mask=attn_mask,
+        )
+        rnn_out = self.attn_norm(rnn_out + attn_out)  # residual + layer norm
+
         batch_size, seq_len, hidden_dim = rnn_out.shape
 
         # 3. RL agent: select relevant historical states at each step
@@ -727,12 +745,10 @@ def main(argv: Optional[List[str]] = None):
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY,
     )
-    # Cosine annealing with warm restarts — better than ReduceLROnPlateau for short training
-    total_steps = (len(train_loader) * 8)  # estimate ~8 epochs
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=len(train_loader), T_mult=2, eta_min=LR * 0.01,
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", factor=0.5, patience=2,
     )
-    use_step_scheduler = True
+    use_step_scheduler = False
 
     # ---- Training loop with time budget ----
     total_start = time.time()
@@ -776,8 +792,6 @@ def main(argv: Optional[List[str]] = None):
             n_batches += 1
             step += 1
 
-            if use_step_scheduler:
-                scheduler.step(epoch + n_batches / len(train_loader))
 
         if n_batches == 0:
             break
@@ -799,8 +813,7 @@ def main(argv: Optional[List[str]] = None):
             best_score = score
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
-        if not use_step_scheduler:
-            scheduler.step(score)
+        scheduler.step(score)
 
         # DQN: update target network and decay epsilon
         if rl_algo == "dqn":
