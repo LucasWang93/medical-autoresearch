@@ -207,11 +207,17 @@ class ReplayBuffer:
         self.buffer: List[Tuple] = []
         self.pos = 0
 
-    def push(self, state, action, reward, next_state):
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(None)
-        self.buffer[self.pos] = (state, action, reward, next_state)
-        self.pos = (self.pos + 1) % self.capacity
+    def push_batch(self, states, actions, rewards, next_states):
+        """Push a batch of transitions (unbatched into individual samples)."""
+        batch_size = states.shape[0]
+        for i in range(batch_size):
+            if len(self.buffer) < self.capacity:
+                self.buffer.append(None)
+            self.buffer[self.pos] = (
+                states[i], actions[i], rewards[i] if rewards.dim() > 0 else rewards,
+                next_states[i],
+            )
+            self.pos = (self.pos + 1) % self.capacity
 
     def sample(self, batch_size: int):
         indices = np.random.choice(len(self.buffer), batch_size, replace=False)
@@ -336,7 +342,7 @@ class ClinicalRLModel(nn.Module):
 
                 # Store DQN transitions
                 if self.rl_algo == "dqn" and self.training:
-                    self.replay_buffer.push(
+                    self.replay_buffer.push_batch(
                         current.detach().cpu(),
                         action_clamped.detach().cpu(),
                         torch.zeros(batch_size),  # reward filled later
@@ -751,13 +757,13 @@ def main(argv: Optional[List[str]] = None):
             if epoch % DQN_TARGET_UPDATE == 0:
                 model.rl_agent.update_target()
             model.rl_agent.decay_epsilon()
-            # Update replay buffer rewards with actual performance
+            # Update replay buffer rewards with validation score as delayed reward
             if hasattr(model, "replay_buffer") and len(model.replay_buffer) > 0:
-                # Use validation score as delayed reward signal
+                reward_val = torch.tensor(score, dtype=torch.float32)
                 for i in range(len(model.replay_buffer.buffer)):
                     if model.replay_buffer.buffer[i] is not None:
                         s, a, _, ns = model.replay_buffer.buffer[i]
-                        model.replay_buffer.buffer[i] = (s, a, torch.tensor(score), ns)
+                        model.replay_buffer.buffer[i] = (s, a, reward_val, ns)
 
         elapsed = time.time() - training_start
         eps_str = f" | eps {model.rl_agent.epsilon:.3f}" if rl_algo == "dqn" else ""
