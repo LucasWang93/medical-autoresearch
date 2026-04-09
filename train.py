@@ -50,7 +50,7 @@ ENTROPY_COEF = 0.01   # exploration bonus
 VALUE_LOSS_COEF = 0.1 # value network weight (reduced from 0.5 — RL loss was dominating)
 USE_BASELINE = True   # variance reduction
 N_ACTIONS = 10        # history window for agent attention
-RL_LOSS_COEF = 0.0    # disable RL loss — test if RL actually helps with sqrt weights
+RL_LOSS_COEF = 0.5    # scale RL loss relative to task loss
 
 # PPO-specific
 PPO_CLIP_EPS = 0.2    # clipping epsilon
@@ -70,10 +70,10 @@ DQN_TARGET_UPDATE = 5  # update target network every N epochs
 USE_ORDINAL = False
 
 # Optimization
-LR = 1e-3
+LR = 7e-4
 LR_WARMUP_STEPS = 500  # linear warmup for first 500 steps
 WEIGHT_DECAY = 1e-5
-BATCH_SIZE = 128
+BATCH_SIZE = 64
 MAX_GRAD_NORM = 1.0
 
 # Input augmentation
