@@ -46,7 +46,7 @@ DROPOUT = 0.3
 # RL hyperparameters
 RL_ALGO = "a2c_gae"    # reinforce | ppo | a2c_gae | dqn
 GAMMA = 0.95          # discount factor for delayed rewards
-ENTROPY_COEF = 0.02   # exploration bonus (increased for better exploration)
+ENTROPY_COEF = 0.01   # exploration bonus
 VALUE_LOSS_COEF = 0.1 # value network weight (reduced from 0.5 — RL loss was dominating)
 USE_BASELINE = True   # variance reduction
 N_ACTIONS = 10        # history window for agent attention
@@ -267,12 +267,6 @@ class ClinicalRLModel(nn.Module):
             dropout=DROPOUT if NUM_RNN_LAYERS > 1 else 0,
         )
 
-        # Self-attention layer after GRU for cross-visit interactions
-        self.self_attn = nn.MultiheadAttention(
-            embed_dim=HIDDEN_DIM, num_heads=4, dropout=DROPOUT, batch_first=True,
-        )
-        self.attn_norm = nn.LayerNorm(HIDDEN_DIM)
-
         # RL agent for history selection
         self.rl_agent = PolicyAgent(
             obs_dim=HIDDEN_DIM,
@@ -322,18 +316,6 @@ class ClinicalRLModel(nn.Module):
 
         # 2. Encode with RNN
         rnn_out, _ = self.rnn(x)  # [batch, visits, hidden_dim]
-
-        # 2b. Self-attention for cross-visit interactions (residual connection)
-        attn_mask = None
-        if mask is not None:
-            # Create attention mask: True = ignore
-            attn_mask = ~mask.bool()
-        attn_out, _ = self.self_attn(
-            rnn_out, rnn_out, rnn_out,
-            key_padding_mask=attn_mask,
-        )
-        rnn_out = self.attn_norm(rnn_out + attn_out)  # residual + layer norm
-
         batch_size, seq_len, hidden_dim = rnn_out.shape
 
         # 3. RL agent: select relevant historical states at each step
@@ -429,9 +411,7 @@ class ClinicalRLModel(nn.Module):
                 result["y_prob"] = class_probs
                 result["logit"] = class_probs.log()  # for RL reward computation
             elif self.task_type == "multiclass":
-                task_loss = F.cross_entropy(
-                    logit, y_true, weight=self.class_weights, label_smoothing=0.05,
-                )
+                task_loss = F.cross_entropy(logit, y_true, weight=self.class_weights)
                 result["y_prob"] = F.softmax(logit, dim=-1)
 
             # RL loss (REINFORCE with baseline)
@@ -742,13 +722,12 @@ def main(argv: Optional[List[str]] = None):
     n_params = count_parameters(model)
     print(f"[train] Model parameters: {n_params:,}")
 
-    optimizer = torch.optim.AdamW(
+    optimizer = torch.optim.Adam(
         model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY,
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=2,
     )
-    use_step_scheduler = False
 
     # ---- Training loop with time budget ----
     total_start = time.time()

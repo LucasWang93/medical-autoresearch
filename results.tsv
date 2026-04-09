@@ -25,3 +25,5 @@ e634f93	7690581	0.528145	-0.000355	1.4	revert	mimic4_los	iter9: dropout 0.3→0.
 ba50abb	7757645	0.530384	0.000322	1.4	keep	mimic4_los	iter10: A2C-GAE + RL_LOSS_COEF=0.5 + ordinal reward (900s)
 ba50abb	7757646	0.526722	-0.003340	1.4	revert	mimic4_los	iter10b: same as iter10 but 1800s — overfit after epoch 2
 7ef1cfe	7758263	0.517276	-0.013108	1.4	revert	mimic4_los	iter11: ordinal regression (cumulative link) — worse, reverted
+9a5f554	7758562	0.526855	-0.003529	1.4	revert	mimic4_los	iter12: AdamW + cosine LR + label smoothing — worse, reverted
+bec7ee6	7761937	0.508965	-0.021419	1.4	revert	mimic4_los	iter13: self-attention after GRU — overfit, reverted
