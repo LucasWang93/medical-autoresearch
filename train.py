@@ -41,7 +41,7 @@ TASK_NAME = "mimic4_los"
 EMBEDDING_DIM = 128
 HIDDEN_DIM = 256
 NUM_RNN_LAYERS = 2
-DROPOUT = 0.3
+DROPOUT = 0.4
 
 # RL hyperparameters
 RL_ALGO = "a2c_gae"    # reinforce | ppo | a2c_gae | dqn
@@ -70,14 +70,14 @@ DQN_TARGET_UPDATE = 5  # update target network every N epochs
 USE_ORDINAL = False
 
 # Optimization
-LR = 7e-4
+LR = 1e-3
 LR_WARMUP_STEPS = 500  # linear warmup for first 500 steps
 WEIGHT_DECAY = 1e-5
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 MAX_GRAD_NORM = 1.0
 
 # Input augmentation
-CODE_MASK_RATE = 0.1  # randomly zero out 10% of medical codes during training
+CODE_MASK_RATE = 0.15 # randomly zero out 15% of medical codes during training
 
 # Reproducibility
 SEED = 42
