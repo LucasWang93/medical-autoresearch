@@ -50,7 +50,7 @@ ENTROPY_COEF = 0.01   # exploration bonus
 VALUE_LOSS_COEF = 0.1 # value network weight (reduced from 0.5 — RL loss was dominating)
 USE_BASELINE = True   # variance reduction
 N_ACTIONS = 10        # history window for agent attention
-RL_LOSS_COEF = 0.5    # scale RL loss relative to task loss (increased: A2C-GAE loss is well-calibrated)
+RL_LOSS_COEF = 0.0    # disable RL loss — test if RL actually helps with sqrt weights
 
 # PPO-specific
 PPO_CLIP_EPS = 0.2    # clipping epsilon
