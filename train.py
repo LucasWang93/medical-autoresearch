@@ -41,7 +41,7 @@ TASK_NAME = "mimic4_los"
 EMBEDDING_DIM = 128
 HIDDEN_DIM = 256
 NUM_RNN_LAYERS = 2
-DROPOUT = 0.1
+DROPOUT = 0.3
 
 # RL hyperparameters
 GAMMA = 0.95          # discount factor for delayed rewards
