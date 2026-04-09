@@ -44,12 +44,27 @@ NUM_RNN_LAYERS = 2
 DROPOUT = 0.3
 
 # RL hyperparameters
+RL_ALGO = "reinforce"  # reinforce | ppo | a2c_gae | dqn
 GAMMA = 0.95          # discount factor for delayed rewards
 ENTROPY_COEF = 0.01   # exploration bonus
 VALUE_LOSS_COEF = 0.1 # value network weight (reduced from 0.5 — RL loss was dominating)
 USE_BASELINE = True   # variance reduction
 N_ACTIONS = 10        # history window for agent attention
 RL_LOSS_COEF = 0.1    # scale RL loss relative to task loss
+
+# PPO-specific
+PPO_CLIP_EPS = 0.2    # clipping epsilon
+PPO_MINI_EPOCHS = 3   # policy update passes per batch
+
+# A2C-GAE-specific
+GAE_LAMBDA = 0.95     # GAE lambda for bias-variance tradeoff
+
+# DQN-specific
+DQN_EPS_START = 1.0   # initial exploration rate
+DQN_EPS_END = 0.05    # final exploration rate
+DQN_EPS_DECAY = 0.995 # per-epoch decay
+DQN_REPLAY_SIZE = 10000
+DQN_TARGET_UPDATE = 5  # update target network every N epochs
 
 # Optimization
 LR = 1e-3
@@ -87,9 +102,9 @@ class CodeEmbedding(nn.Module):
 class PolicyAgent(nn.Module):
     """RL agent that selects relevant historical states.
 
-    At each timestep, observes the current context and chooses
-    which historical hidden state to attend to. This implements
-    a learned attention mechanism via REINFORCE.
+    Supports multiple RL algorithms:
+    - reinforce/a2c_gae/ppo: stochastic policy + value baseline
+    - dqn: Q-network with epsilon-greedy exploration
     """
     def __init__(
         self,
@@ -97,22 +112,43 @@ class PolicyAgent(nn.Module):
         n_actions: int = 10,
         hidden_dim: int = 64,
         use_baseline: bool = True,
+        rl_algo: str = "reinforce",
     ):
         super().__init__()
         self.n_actions = n_actions
         self.use_baseline = use_baseline
+        self.rl_algo = rl_algo
 
-        self.policy_net = nn.Sequential(
-            nn.Linear(obs_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, n_actions),
-        )
-        if use_baseline:
-            self.value_net = nn.Sequential(
+        if rl_algo == "dqn":
+            # Q-network for DQN
+            self.q_net = nn.Sequential(
+                nn.Linear(obs_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, n_actions),
+            )
+            # Target network (copy of q_net, updated periodically)
+            self.q_target = nn.Sequential(
+                nn.Linear(obs_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, n_actions),
+            )
+            self.q_target.load_state_dict(self.q_net.state_dict())
+            for p in self.q_target.parameters():
+                p.requires_grad = False
+            self.epsilon = DQN_EPS_START
+        else:
+            # Policy network for REINFORCE / PPO / A2C-GAE
+            self.policy_net = nn.Sequential(
                 nn.Linear(obs_dim, hidden_dim),
                 nn.Tanh(),
-                nn.Linear(hidden_dim, 1),
+                nn.Linear(hidden_dim, n_actions),
             )
+            if use_baseline or rl_algo in ("ppo", "a2c_gae"):
+                self.value_net = nn.Sequential(
+                    nn.Linear(obs_dim, hidden_dim),
+                    nn.Tanh(),
+                    nn.Linear(hidden_dim, 1),
+                )
 
     def forward(
         self, observation: torch.Tensor,
@@ -121,6 +157,13 @@ class PolicyAgent(nn.Module):
 
         Returns: (action, log_prob, entropy, baseline_value)
         """
+        if self.rl_algo == "dqn":
+            return self._forward_dqn(observation)
+        return self._forward_policy(observation)
+
+    def _forward_policy(
+        self, observation: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         logits = self.policy_net(observation.detach())
         dist = torch.distributions.Categorical(logits=logits)
         action = dist.sample()
@@ -128,10 +171,56 @@ class PolicyAgent(nn.Module):
         entropy = dist.entropy()
 
         baseline = None
-        if self.use_baseline:
+        if hasattr(self, "value_net"):
             baseline = self.value_net(observation.detach()).squeeze(-1)
 
         return action, log_prob, entropy, baseline
+
+    def _forward_dqn(
+        self, observation: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        q_values = self.q_net(observation.detach())
+        # Epsilon-greedy
+        if self.training and np.random.random() < self.epsilon:
+            action = torch.randint(0, self.n_actions, (observation.shape[0],),
+                                   device=observation.device)
+        else:
+            action = q_values.argmax(dim=-1)
+        # Return q_values as "log_prob" placeholder for loss computation
+        return action, q_values, torch.zeros_like(action, dtype=torch.float), None
+
+    def update_target(self):
+        """Copy q_net weights to target network (DQN only)."""
+        if self.rl_algo == "dqn":
+            self.q_target.load_state_dict(self.q_net.state_dict())
+
+    def decay_epsilon(self):
+        """Decay exploration rate (DQN only)."""
+        if self.rl_algo == "dqn":
+            self.epsilon = max(DQN_EPS_END, self.epsilon * DQN_EPS_DECAY)
+
+
+class ReplayBuffer:
+    """Simple replay buffer for DQN."""
+    def __init__(self, capacity: int = DQN_REPLAY_SIZE):
+        self.capacity = capacity
+        self.buffer: List[Tuple] = []
+        self.pos = 0
+
+    def push(self, state, action, reward, next_state):
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(None)
+        self.buffer[self.pos] = (state, action, reward, next_state)
+        self.pos = (self.pos + 1) % self.capacity
+
+    def sample(self, batch_size: int):
+        indices = np.random.choice(len(self.buffer), batch_size, replace=False)
+        states, actions, rewards, next_states = zip(*[self.buffer[i] for i in indices])
+        return (torch.stack(states), torch.stack(actions),
+                torch.stack(rewards), torch.stack(next_states))
+
+    def __len__(self):
+        return len(self.buffer)
 
 
 class ClinicalRLModel(nn.Module):
@@ -145,12 +234,13 @@ class ClinicalRLModel(nn.Module):
 
     The agent can modify any part of this architecture.
     """
-    def __init__(self, task_spec: TaskSpec, class_weights=None):
+    def __init__(self, task_spec: TaskSpec, class_weights=None, rl_algo: str = "reinforce"):
         super().__init__()
         self.spec = task_spec
         self.task_type = task_spec.task_type
         self.label_key = task_spec.label_key
         self.class_weights = class_weights
+        self.rl_algo = rl_algo
 
         # Embeddings for each feature type
         self.embeddings = nn.ModuleDict()
@@ -174,7 +264,12 @@ class ClinicalRLModel(nn.Module):
             n_actions=N_ACTIONS,
             hidden_dim=64,
             use_baseline=USE_BASELINE,
+            rl_algo=rl_algo,
         )
+
+        # DQN replay buffer
+        if rl_algo == "dqn":
+            self.replay_buffer = ReplayBuffer(DQN_REPLAY_SIZE)
 
         # Fusion layer: combines current state + agent-selected history
         self.fusion = nn.Sequential(
@@ -239,6 +334,15 @@ class ClinicalRLModel(nn.Module):
 
                 fused = self.fusion(torch.cat([current, selected], dim=-1))
 
+                # Store DQN transitions
+                if self.rl_algo == "dqn" and self.training:
+                    self.replay_buffer.push(
+                        current.detach().cpu(),
+                        action_clamped.detach().cpu(),
+                        torch.zeros(batch_size),  # reward filled later
+                        rnn_out[:, t, :].detach().cpu(),
+                    )
+
             fused_states.append(fused)
 
         fused_seq = torch.stack(fused_states, dim=1)  # [batch, visits, hidden]
@@ -285,6 +389,18 @@ class ClinicalRLModel(nn.Module):
 
         return result
 
+    def _compute_reward(self, logit: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+        """Compute per-sample reward from prediction quality."""
+        with torch.no_grad():
+            if self.task_type == "multilabel":
+                y_pred = (torch.sigmoid(logit) > 0.5).float()
+                intersection = (y_pred * y_true).sum(dim=-1)
+                union = ((y_pred + y_true) > 0).float().sum(dim=-1)
+                return intersection / union.clamp(min=1)
+            else:
+                pred_class = logit.argmax(dim=-1)
+                return (pred_class == y_true).float()
+
     def _compute_rl_loss(
         self,
         log_probs: List[torch.Tensor],
@@ -294,37 +410,29 @@ class ClinicalRLModel(nn.Module):
         y_true: torch.Tensor,
         logit: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute RL loss using REINFORCE with reward shaping.
-
-        Reward signal is derived from prediction quality:
-        - multilabel: per-sample Jaccard similarity
-        - binary/multiclass: correctness indicator
-        """
         if not log_probs:
             return torch.tensor(0.0, device=logit.device)
 
-        # Compute per-sample reward
-        with torch.no_grad():
-            if self.task_type == "multilabel":
-                y_pred = (torch.sigmoid(logit) > 0.5).float()
-                intersection = (y_pred * y_true).sum(dim=-1)
-                union = ((y_pred + y_true) > 0).float().sum(dim=-1)
-                reward = intersection / union.clamp(min=1)
-            elif self.task_type == "binary":
-                pred_class = logit.argmax(dim=-1)
-                reward = (pred_class == y_true).float()
-            elif self.task_type == "multiclass":
-                pred_class = logit.argmax(dim=-1)
-                reward = (pred_class == y_true).float()
+        if self.rl_algo == "dqn":
+            return self._compute_dqn_loss(logit)
+        elif self.rl_algo == "ppo":
+            return self._compute_ppo_loss(log_probs, entropies, baselines, logit, y_true)
+        elif self.rl_algo == "a2c_gae":
+            return self._compute_a2c_gae_loss(log_probs, entropies, baselines, logit, y_true)
+        else:  # reinforce
+            return self._compute_reinforce_loss(log_probs, entropies, baselines, logit, y_true)
 
-        # Discount rewards backward through time
+    def _compute_reinforce_loss(
+        self, log_probs, entropies, baselines, logit, y_true,
+    ) -> torch.Tensor:
+        """Original REINFORCE with baseline."""
+        reward = self._compute_reward(logit, y_true)
         T = len(log_probs)
         discounted = torch.zeros(T, reward.shape[0], device=logit.device)
         discounted[-1] = reward
         for t in reversed(range(T - 1)):
             discounted[t] = reward + GAMMA * discounted[t + 1]
 
-        # REINFORCE loss
         policy_loss = torch.tensor(0.0, device=logit.device)
         value_loss = torch.tensor(0.0, device=logit.device)
         entropy_bonus = torch.tensor(0.0, device=logit.device)
@@ -339,13 +447,129 @@ class ClinicalRLModel(nn.Module):
                 policy_loss -= (log_probs[t] * R).mean()
             entropy_bonus += entropies[t].mean()
 
-        total_rl_loss = (
+        return (
             policy_loss / max(T, 1)
             + VALUE_LOSS_COEF * value_loss / max(T, 1)
             - ENTROPY_COEF * entropy_bonus / max(T, 1)
         )
 
-        return total_rl_loss
+    def _compute_ppo_loss(
+        self, log_probs, entropies, baselines, logit, y_true,
+    ) -> torch.Tensor:
+        """PPO with clipped surrogate objective."""
+        reward = self._compute_reward(logit, y_true)
+        T = len(log_probs)
+        discounted = torch.zeros(T, reward.shape[0], device=logit.device)
+        discounted[-1] = reward
+        for t in reversed(range(T - 1)):
+            discounted[t] = reward + GAMMA * discounted[t + 1]
+
+        # Store old log probs for ratio computation (detached)
+        old_log_probs = [lp.detach() for lp in log_probs]
+
+        policy_loss = torch.tensor(0.0, device=logit.device)
+        value_loss = torch.tensor(0.0, device=logit.device)
+        entropy_bonus = torch.tensor(0.0, device=logit.device)
+
+        for t in range(T):
+            R = discounted[t]
+            if baselines:
+                advantage = (R - baselines[t]).detach()
+            else:
+                advantage = R
+
+            # PPO clipped ratio
+            ratio = torch.exp(log_probs[t] - old_log_probs[t])
+            surr1 = ratio * advantage
+            surr2 = torch.clamp(ratio, 1.0 - PPO_CLIP_EPS, 1.0 + PPO_CLIP_EPS) * advantage
+            policy_loss -= torch.min(surr1, surr2).mean()
+
+            if baselines:
+                # Clipped value loss
+                value_loss += F.mse_loss(baselines[t], R)
+
+            entropy_bonus += entropies[t].mean()
+
+        return (
+            policy_loss / max(T, 1)
+            + VALUE_LOSS_COEF * value_loss / max(T, 1)
+            - ENTROPY_COEF * entropy_bonus / max(T, 1)
+        )
+
+    def _compute_a2c_gae_loss(
+        self, log_probs, entropies, baselines, logit, y_true,
+    ) -> torch.Tensor:
+        """A2C with Generalized Advantage Estimation (GAE-lambda)."""
+        reward = self._compute_reward(logit, y_true)
+        T = len(log_probs)
+
+        # Compute GAE advantages
+        advantages = torch.zeros(T, reward.shape[0], device=logit.device)
+        gae = torch.zeros(reward.shape[0], device=logit.device)
+
+        for t in reversed(range(T)):
+            if t == T - 1:
+                next_value = torch.zeros_like(reward)
+            else:
+                next_value = baselines[t + 1].detach() if baselines else torch.zeros_like(reward)
+
+            current_value = baselines[t].detach() if baselines else torch.zeros_like(reward)
+            # TD error: r + gamma * V(s') - V(s)
+            # reward is terminal, so at last step delta = reward - V(s)
+            # at other steps delta = gamma * V(s') - V(s)  (no intermediate reward)
+            if t == T - 1:
+                delta = reward - current_value
+            else:
+                delta = GAMMA * next_value - current_value
+            gae = delta + GAMMA * GAE_LAMBDA * gae
+            advantages[t] = gae
+
+        policy_loss = torch.tensor(0.0, device=logit.device)
+        value_loss = torch.tensor(0.0, device=logit.device)
+        entropy_bonus = torch.tensor(0.0, device=logit.device)
+
+        for t in range(T):
+            adv = advantages[t].detach()
+            policy_loss -= (log_probs[t] * adv).mean()
+            if baselines:
+                # Value target = advantage + current value estimate
+                returns = advantages[t] + baselines[t].detach()
+                value_loss += F.mse_loss(baselines[t], returns.detach())
+            entropy_bonus += entropies[t].mean()
+
+        return (
+            policy_loss / max(T, 1)
+            + VALUE_LOSS_COEF * value_loss / max(T, 1)
+            - ENTROPY_COEF * entropy_bonus / max(T, 1)
+        )
+
+    def _compute_dqn_loss(self, logit: torch.Tensor) -> torch.Tensor:
+        """DQN loss from replay buffer."""
+        if not hasattr(self, "replay_buffer") or len(self.replay_buffer) < BATCH_SIZE:
+            return torch.tensor(0.0, device=logit.device)
+
+        device = logit.device
+        states, actions, rewards, next_states = self.replay_buffer.sample(
+            min(BATCH_SIZE, len(self.replay_buffer))
+        )
+        states = states.to(device)
+        actions = actions.to(device).long()
+        rewards = rewards.to(device)
+        next_states = next_states.to(device)
+
+        # Current Q values
+        q_values = self.rl_agent.q_net(states)
+        q_selected = q_values.gather(1, actions.unsqueeze(-1)).squeeze(-1)
+
+        # Target Q values (Double DQN: use online net for action selection)
+        with torch.no_grad():
+            next_q = self.rl_agent.q_net(next_states)
+            next_actions = next_q.argmax(dim=-1, keepdim=True)
+            next_q_target = self.rl_agent.q_target(next_states)
+            next_q_selected = next_q_target.gather(1, next_actions).squeeze(-1)
+            target = rewards + GAMMA * next_q_selected
+
+        return F.smooth_l1_loss(q_selected, target)
 
 
 # ============================================================
@@ -391,6 +615,9 @@ def parse_args(argv: Optional[List[str]] = None):
                         help="Use real data via PyHealth (requires MIMIC)")
     parser.add_argument("--data-root", type=str, default=None,
                         help="MIMIC data root (for --use-pyhealth)")
+    parser.add_argument("--rl-algo", type=str, default=None,
+                        choices=["reinforce", "ppo", "a2c_gae", "dqn"],
+                        help="Override RL algorithm")
     return parser.parse_args(argv)
 
 
@@ -400,6 +627,7 @@ def main(argv: Optional[List[str]] = None):
     task_name = args.task or TASK_NAME
     time_budget = TIME_BUDGET_SECONDS if args.time_budget is None else args.time_budget
     batch_size = BATCH_SIZE if args.batch_size is None else args.batch_size
+    rl_algo = args.rl_algo or RL_ALGO
 
     set_seed(SEED)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -442,7 +670,8 @@ def main(argv: Optional[List[str]] = None):
         print(f"[train] Class weights: {weights.tolist()}")
 
     # ---- Build model ----
-    model = ClinicalRLModel(task_spec, class_weights=class_weights).to(device)
+    print(f"[train] RL algorithm: {rl_algo}")
+    model = ClinicalRLModel(task_spec, class_weights=class_weights, rl_algo=rl_algo).to(device)
     n_params = count_parameters(model)
     print(f"[train] Model parameters: {n_params:,}")
 
@@ -517,12 +746,26 @@ def main(argv: Optional[List[str]] = None):
 
         scheduler.step(score)
 
+        # DQN: update target network and decay epsilon
+        if rl_algo == "dqn":
+            if epoch % DQN_TARGET_UPDATE == 0:
+                model.rl_agent.update_target()
+            model.rl_agent.decay_epsilon()
+            # Update replay buffer rewards with actual performance
+            if hasattr(model, "replay_buffer") and len(model.replay_buffer) > 0:
+                # Use validation score as delayed reward signal
+                for i in range(len(model.replay_buffer.buffer)):
+                    if model.replay_buffer.buffer[i] is not None:
+                        s, a, _, ns = model.replay_buffer.buffer[i]
+                        model.replay_buffer.buffer[i] = (s, a, torch.tensor(score), ns)
+
         elapsed = time.time() - training_start
+        eps_str = f" | eps {model.rl_agent.epsilon:.3f}" if rl_algo == "dqn" else ""
         print(
             f"[train] Epoch {epoch:3d} | loss {avg_loss:.4f} "
             f"(task {avg_task:.4f} + rl {avg_rl:.4f}) | "
             f"val_{task_spec.primary_metric} {score:.4f} | "
-            f"best {best_score:.4f} | {elapsed:.0f}s/{time_budget}s"
+            f"best {best_score:.4f} | {elapsed:.0f}s/{time_budget}s{eps_str}"
         )
 
     training_seconds = time.time() - training_start
