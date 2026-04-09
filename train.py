@@ -75,8 +75,8 @@ WEIGHT_DECAY = 1e-5
 BATCH_SIZE = 128
 MAX_GRAD_NORM = 1.0
 
-# EMA
-EMA_DECAY = 0.999     # exponential moving average of model weights
+# Input augmentation
+CODE_MASK_RATE = 0.2  # randomly zero out 20% of medical codes during training
 
 # Reproducibility
 SEED = 42
@@ -99,6 +99,10 @@ class CodeEmbedding(nn.Module):
 
     def forward(self, x: torch.LongTensor) -> torch.Tensor:
         # x: [batch, visits, codes]
+        # Input augmentation: randomly mask codes during training
+        if self.training and CODE_MASK_RATE > 0:
+            mask = torch.rand_like(x, dtype=torch.float) > CODE_MASK_RATE
+            x = x * mask.long()
         emb = self.embedding(x)            # [batch, visits, codes, embed_dim]
         emb = self.dropout(emb)
         # Sum over codes dimension (ignore padding via embedding zero)
@@ -260,9 +264,9 @@ class ClinicalRLModel(nn.Module):
             vocab = task_spec.feature_dims.get(key, 500)
             self.embeddings[key] = CodeEmbedding(vocab, EMBEDDING_DIM, DROPOUT)
 
-        # Sequence encoder
+        # Sequence encoder (LSTM for better long-range memory via cell state)
         input_dim = EMBEDDING_DIM * len(task_spec.feature_keys)
-        self.rnn = nn.GRU(
+        self.rnn = nn.LSTM(
             input_size=input_dim,
             hidden_size=HIDDEN_DIM,
             num_layers=NUM_RNN_LAYERS,
@@ -317,7 +321,7 @@ class ClinicalRLModel(nn.Module):
 
         mask = kwargs.get("mask")  # [batch, visits]
 
-        # 2. Encode with RNN
+        # 2. Encode with RNN (LSTM returns output, (h_n, c_n))
         rnn_out, _ = self.rnn(x)  # [batch, visits, hidden_dim]
         batch_size, seq_len, hidden_dim = rnn_out.shape
 
@@ -732,23 +736,6 @@ def main(argv: Optional[List[str]] = None):
         optimizer, mode="max", factor=0.5, patience=2,
     )
 
-    # ---- EMA model ----
-    ema_state = {k: v.clone() for k, v in model.state_dict().items()}
-
-    def update_ema():
-        with torch.no_grad():
-            for k, v in model.state_dict().items():
-                ema_state[k].mul_(EMA_DECAY).add_(v, alpha=1 - EMA_DECAY)
-
-    def apply_ema():
-        """Swap model weights with EMA weights for evaluation."""
-        orig = {k: v.clone() for k, v in model.state_dict().items()}
-        model.load_state_dict(ema_state)
-        return orig
-
-    def restore_from_ema(orig):
-        model.load_state_dict(orig)
-
     # ---- Training loop with time budget ----
     total_start = time.time()
     training_start = time.time()
@@ -784,7 +771,6 @@ def main(argv: Optional[List[str]] = None):
                     model.parameters(), MAX_GRAD_NORM,
                 )
             optimizer.step()
-            update_ema()
 
             epoch_loss += loss.item()
             epoch_task_loss += output.get("task_loss", loss).item()
@@ -801,8 +787,7 @@ def main(argv: Optional[List[str]] = None):
         avg_task = epoch_task_loss / n_batches
         avg_rl = epoch_rl_loss / n_batches
 
-        # Validate with EMA weights
-        orig_weights = apply_ema()
+        # Validate every epoch
         val_metrics = evaluate_model(model, val_loader, task_spec, device)
         score = val_metrics.get(task_spec.primary_metric, 0.0)
 
@@ -813,7 +798,6 @@ def main(argv: Optional[List[str]] = None):
         if is_better:
             best_score = score
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-        restore_from_ema(orig_weights)
 
         scheduler.step(score)
 
@@ -841,11 +825,10 @@ def main(argv: Optional[List[str]] = None):
 
     training_seconds = time.time() - training_start
 
-    # ---- Load best EMA model & evaluate on test ----
+    # ---- Load best model & evaluate on test ----
     if best_state is not None:
         model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
     test_metrics = evaluate_model(model, test_loader, task_spec, device)
-    print(f"[train] Test with best EMA weights")
 
     # Add DDI rate for drug recommendation
     if ddi_matrix is not None:
