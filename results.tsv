@@ -15,3 +15,6 @@ a314450	7601442	0.166126	0.166126	0.4	keep	mimic4_drugrec	baseline REINFORCE, 12
 beb7ee5	7684150	0.528500	0.011075	1.4	keep	mimic4_los	iter4: hidden256 + 2-layer GRU + 900s (4 epochs, 1M params)
 921acca	7685153	0.528211	-0.000289	1.4	revert	mimic4_los	iter5: focal loss gamma=2 + LR 2e-3 — no improvement, reverted
 e04e777	7685951	0.511302	-0.017198	2.3	revert	mimic4_los	iter6: embed256 + label smoothing + OneCycleLR — worse, reverted
+37c2ddc	7687356	0.524374	-0.004126	2.8	revert	mimic4_los	iter7: batch256 for more epochs — worse, reverted
+a913813	7689394	0.516272	-0.012228	1.5	revert	mimic4_los	iter8: temporal attention pooling — worse, reverted
+e634f93	7690581	0.528145	-0.000355	1.4	revert	mimic4_los	iter9: dropout 0.3→0.1 — no improvement, reverted
