@@ -46,7 +46,7 @@ DROPOUT = 0.3
 # RL hyperparameters
 RL_ALGO = "a2c_gae"    # reinforce | ppo | a2c_gae | dqn
 GAMMA = 0.95          # discount factor for delayed rewards
-ENTROPY_COEF = 0.01   # exploration bonus
+ENTROPY_COEF = 0.02   # exploration bonus (increased for better exploration)
 VALUE_LOSS_COEF = 0.1 # value network weight (reduced from 0.5 — RL loss was dominating)
 USE_BASELINE = True   # variance reduction
 N_ACTIONS = 10        # history window for agent attention
@@ -67,7 +67,7 @@ DQN_REPLAY_SIZE = 10000
 DQN_TARGET_UPDATE = 5  # update target network every N epochs
 
 # Ordinal regression (for multiclass tasks with ordered labels like LOS)
-USE_ORDINAL = True
+USE_ORDINAL = False
 
 # Optimization
 LR = 1e-3
@@ -411,7 +411,9 @@ class ClinicalRLModel(nn.Module):
                 result["y_prob"] = class_probs
                 result["logit"] = class_probs.log()  # for RL reward computation
             elif self.task_type == "multiclass":
-                task_loss = F.cross_entropy(logit, y_true, weight=self.class_weights)
+                task_loss = F.cross_entropy(
+                    logit, y_true, weight=self.class_weights, label_smoothing=0.05,
+                )
                 result["y_prob"] = F.softmax(logit, dim=-1)
 
             # RL loss (REINFORCE with baseline)
@@ -722,12 +724,15 @@ def main(argv: Optional[List[str]] = None):
     n_params = count_parameters(model)
     print(f"[train] Model parameters: {n_params:,}")
 
-    optimizer = torch.optim.Adam(
+    optimizer = torch.optim.AdamW(
         model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY,
     )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=2,
+    # Cosine annealing with warm restarts — better than ReduceLROnPlateau for short training
+    total_steps = (len(train_loader) * 8)  # estimate ~8 epochs
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=len(train_loader), T_mult=2, eta_min=LR * 0.01,
     )
+    use_step_scheduler = True
 
     # ---- Training loop with time budget ----
     total_start = time.time()
@@ -771,6 +776,9 @@ def main(argv: Optional[List[str]] = None):
             n_batches += 1
             step += 1
 
+            if use_step_scheduler:
+                scheduler.step(epoch + n_batches / len(train_loader))
+
         if n_batches == 0:
             break
 
@@ -791,7 +799,8 @@ def main(argv: Optional[List[str]] = None):
             best_score = score
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
-        scheduler.step(score)
+        if not use_step_scheduler:
+            scheduler.step(score)
 
         # DQN: update target network and decay epsilon
         if rl_algo == "dqn":

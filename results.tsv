@@ -24,3 +24,4 @@ e634f93	7690581	0.528145	-0.000355	1.4	revert	mimic4_los	iter9: dropout 0.3→0.
 30f48f2	7757430	0.521302	-0.007198	1.6	ref	mimic4_los	RL-algo comparison: DQN (Double DQN + replay buffer)
 ba50abb	7757645	0.530384	0.000322	1.4	keep	mimic4_los	iter10: A2C-GAE + RL_LOSS_COEF=0.5 + ordinal reward (900s)
 ba50abb	7757646	0.526722	-0.003340	1.4	revert	mimic4_los	iter10b: same as iter10 but 1800s — overfit after epoch 2
+7ef1cfe	7758263	0.517276	-0.013108	1.4	revert	mimic4_los	iter11: ordinal regression (cumulative link) — worse, reverted
