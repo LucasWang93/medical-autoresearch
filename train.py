@@ -71,6 +71,7 @@ USE_ORDINAL = False
 
 # Optimization
 LR = 1e-3
+LR_WARMUP_STEPS = 500  # linear warmup for first 500 steps
 WEIGHT_DECAY = 1e-5
 BATCH_SIZE = 128
 MAX_GRAD_NORM = 1.0
@@ -735,6 +736,7 @@ def main(argv: Optional[List[str]] = None):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=2,
     )
+    warmup_done = False
 
     # ---- Training loop with time budget ----
     total_start = time.time()
@@ -771,6 +773,16 @@ def main(argv: Optional[List[str]] = None):
                     model.parameters(), MAX_GRAD_NORM,
                 )
             optimizer.step()
+
+            # Linear LR warmup
+            if not warmup_done and step < LR_WARMUP_STEPS:
+                warmup_factor = (step + 1) / LR_WARMUP_STEPS
+                for pg in optimizer.param_groups:
+                    pg["lr"] = LR * warmup_factor
+            elif not warmup_done:
+                warmup_done = True
+                for pg in optimizer.param_groups:
+                    pg["lr"] = LR
 
             epoch_loss += loss.item()
             epoch_task_loss += output.get("task_loss", loss).item()
