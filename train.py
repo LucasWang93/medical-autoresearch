@@ -75,6 +75,9 @@ WEIGHT_DECAY = 1e-5
 BATCH_SIZE = 128
 MAX_GRAD_NORM = 1.0
 
+# EMA
+EMA_DECAY = 0.999     # exponential moving average of model weights
+
 # Reproducibility
 SEED = 42
 
@@ -729,6 +732,23 @@ def main(argv: Optional[List[str]] = None):
         optimizer, mode="max", factor=0.5, patience=2,
     )
 
+    # ---- EMA model ----
+    ema_state = {k: v.clone() for k, v in model.state_dict().items()}
+
+    def update_ema():
+        with torch.no_grad():
+            for k, v in model.state_dict().items():
+                ema_state[k].mul_(EMA_DECAY).add_(v, alpha=1 - EMA_DECAY)
+
+    def apply_ema():
+        """Swap model weights with EMA weights for evaluation."""
+        orig = {k: v.clone() for k, v in model.state_dict().items()}
+        model.load_state_dict(ema_state)
+        return orig
+
+    def restore_from_ema(orig):
+        model.load_state_dict(orig)
+
     # ---- Training loop with time budget ----
     total_start = time.time()
     training_start = time.time()
@@ -764,6 +784,7 @@ def main(argv: Optional[List[str]] = None):
                     model.parameters(), MAX_GRAD_NORM,
                 )
             optimizer.step()
+            update_ema()
 
             epoch_loss += loss.item()
             epoch_task_loss += output.get("task_loss", loss).item()
@@ -780,7 +801,8 @@ def main(argv: Optional[List[str]] = None):
         avg_task = epoch_task_loss / n_batches
         avg_rl = epoch_rl_loss / n_batches
 
-        # Validate every epoch
+        # Validate with EMA weights
+        orig_weights = apply_ema()
         val_metrics = evaluate_model(model, val_loader, task_spec, device)
         score = val_metrics.get(task_spec.primary_metric, 0.0)
 
@@ -791,6 +813,7 @@ def main(argv: Optional[List[str]] = None):
         if is_better:
             best_score = score
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+        restore_from_ema(orig_weights)
 
         scheduler.step(score)
 
@@ -818,10 +841,11 @@ def main(argv: Optional[List[str]] = None):
 
     training_seconds = time.time() - training_start
 
-    # ---- Load best model & evaluate on test ----
+    # ---- Load best EMA model & evaluate on test ----
     if best_state is not None:
         model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
     test_metrics = evaluate_model(model, test_loader, task_spec, device)
+    print(f"[train] Test with best EMA weights")
 
     # Add DDI rate for drug recommendation
     if ddi_matrix is not None:
