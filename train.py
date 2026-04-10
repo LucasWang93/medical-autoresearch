@@ -70,7 +70,7 @@ DQN_TARGET_UPDATE = 5  # update target network every N epochs
 USE_ORDINAL = False
 
 # Optimization
-LR = 1e-3
+LR = 2e-3
 LR_WARMUP_STEPS = 500  # linear warmup for first 500 steps
 WEIGHT_DECAY = 1e-5
 BATCH_SIZE = 128
@@ -295,11 +295,6 @@ class ClinicalRLModel(nn.Module):
             nn.Dropout(DROPOUT),
         )
 
-        # Attention pooling for final representation
-        self.attn_pool = nn.Sequential(
-            nn.Linear(HIDDEN_DIM, 1),
-        )
-
         # Task-specific output head
         self.use_ordinal = (task_spec.task_type == "multiclass" and USE_ORDINAL)
         if task_spec.task_type == "multilabel":
@@ -376,12 +371,14 @@ class ClinicalRLModel(nn.Module):
 
         fused_seq = torch.stack(fused_states, dim=1)  # [batch, visits, hidden]
 
-        # 4. Attention-weighted pooling over all valid time steps
-        attn_scores = self.attn_pool(fused_seq).squeeze(-1)  # [batch, visits]
+        # 4. Get last valid state for prediction
         if mask is not None:
-            attn_scores = attn_scores.masked_fill(~mask.bool(), float("-inf"))
-        attn_weights = F.softmax(attn_scores, dim=-1)  # [batch, visits]
-        last_state = (attn_weights.unsqueeze(-1) * fused_seq).sum(dim=1)  # [batch, hidden]
+            lengths = mask.long().sum(dim=1).clamp(min=1) - 1
+            last_state = fused_seq[
+                torch.arange(batch_size, device=device), lengths
+            ]
+        else:
+            last_state = fused_seq[:, -1, :]
 
         # 5. Predict
         logit = self.output_head(last_state)
