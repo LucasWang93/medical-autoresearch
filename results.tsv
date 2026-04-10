@@ -33,3 +33,12 @@ bec7ee6	7761937	0.508965	-0.021419	1.4	revert	mimic4_los	iter13: self-attention 
 4ab6ca8	7782116	0.523258	-0.007126	1.4	revert	mimic4_los	iter14: EMA decay=0.999 — smoothed too aggressively, reverted
 2c6b2b1	7783320	0.502269	-0.028115	1.4	revert	mimic4_los	iter15: LSTM + code masking 20% — worse, reverted
 0bd508e	7784301	0.544088	0.013704	1.4	keep	mimic4_los	iter16: code masking 10% + sqrt class weights — NEW BEST
+4ab6ca8	7782116	0.523258	-0.007126	1.4	revert	mimic4_los	iter14: EMA decay=0.999 — smoothed too aggressively, reverted
+2c6b2b1	7783320	0.502269	-0.028115	1.4	revert	mimic4_los	iter15: LSTM + code masking 20% — worse, reverted
+1097316	7786783	0.538918	-0.005170	1.4	revert	mimic4_los	iter16b: 1200s (5 epochs) — overfit after epoch 2
+284d715	7787676	0.543693	-0.000395	1.4	revert	mimic4_los	iter17: LR warmup 500 steps — no improvement
+b4bae5f	7787864	0.536690	-0.007398	1.4	revert	mimic4_los	iter18: ablation RL_LOSS_COEF=0 — RL contributes +0.007
+e542cd0	7790637	0.532159	-0.011929	1.4	revert	mimic4_los	iter19: batch64 + LR 7e-4 — too slow, only 3 epochs
+5113a2c	7791959	0.527800	-0.016288	1.4	revert	mimic4_los	iter20: code masking 15% + dropout 0.4 — preempted, val 0.528
+321c474	7793341	0.540644	-0.003444	1.4	revert	mimic4_los	iter21: attention pooling — close but no improvement
+2a137b4	7793654	0.537871	-0.006217	1.4	revert	mimic4_los	iter22: LR 2e-3 — too aggressive, reverted
