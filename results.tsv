@@ -42,3 +42,6 @@ e542cd0	7790637	0.532159	-0.011929	1.4	revert	mimic4_los	iter19: batch64 + LR 7e
 5113a2c	7791959	0.527800	-0.016288	1.4	revert	mimic4_los	iter20: code masking 15% + dropout 0.4 — preempted, val 0.528
 321c474	7793341	0.540644	-0.003444	1.4	revert	mimic4_los	iter21: attention pooling — close but no improvement
 2a137b4	7793654	0.537871	-0.006217	1.4	revert	mimic4_los	iter22: LR 2e-3 — too aggressive, reverted
+15eb004	7793996	0.537201	0.000000	1.4	ref	mimic4_los	iter23 seed=42: multi-seed test
+15eb004	7793997	0.541005	0.000000	1.4	ref	mimic4_los	iter23 seed=123: multi-seed test
+15eb004	7793998	0.540701	0.000000	1.4	ref	mimic4_los	iter23 seed=7: multi-seed test (mean=0.540±0.002)
