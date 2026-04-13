@@ -39,7 +39,7 @@ TASK_NAME = "mimic4_los"
 
 # Model architecture
 EMBEDDING_DIM = 128
-HIDDEN_DIM = 384
+HIDDEN_DIM = 256
 NUM_RNN_LAYERS = 2
 DROPOUT = 0.3
 
@@ -760,7 +760,7 @@ def main(argv: Optional[List[str]] = None):
         model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY,
     )
     if task_spec.task_type == "multilabel":
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
         scheduler_uses_score = False
     else:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
