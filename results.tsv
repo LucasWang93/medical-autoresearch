@@ -49,3 +49,4 @@ faa4d59	8122677	0.816473	0.000000	1.4	ref	mimic4_phenotyping	baseline: A2C-GAE d
 937dc99	8126401	0.822049	0.005576	1.4	keep	mimic4_phenotyping	iter1: cosine LR + 1800s — val monotonic to 0.825, +0.0056 over baseline
 3434500	8128373	0.828739	0.006690	1.4	keep	mimic4_phenotyping	iter2: BCE pos_weight sqrt inv-freq — +0.0067, broad gains across all metrics
 3cb7c7a	8132616	0.828921	0.000182	1.5	revert	mimic4_phenotyping	iter3: hidden_dim 384 — flat test (+0.0002), val +0.0019 = mild overfit, reverted
+889c2d5	8134444	0.833323	0.004584	1.4	keep	mimic4_phenotyping	iter4: T_max=10 + 2700s — 11 epochs, val saturated 0.8356, +0.0046 over iter2
