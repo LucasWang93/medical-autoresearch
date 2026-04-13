@@ -250,12 +250,13 @@ class ClinicalRLModel(nn.Module):
 
     The agent can modify any part of this architecture.
     """
-    def __init__(self, task_spec: TaskSpec, class_weights=None, rl_algo: str = "reinforce"):
+    def __init__(self, task_spec: TaskSpec, class_weights=None, pos_weight=None, rl_algo: str = "reinforce"):
         super().__init__()
         self.spec = task_spec
         self.task_type = task_spec.task_type
         self.label_key = task_spec.label_key
         self.class_weights = class_weights
+        self.pos_weight = pos_weight
         self.rl_algo = rl_algo
 
         # Embeddings for each feature type
@@ -391,7 +392,9 @@ class ClinicalRLModel(nn.Module):
 
             # Task loss
             if self.task_type == "multilabel":
-                task_loss = F.binary_cross_entropy_with_logits(logit, y_true)
+                task_loss = F.binary_cross_entropy_with_logits(
+                    logit, y_true, pos_weight=self.pos_weight,
+                )
                 result["y_prob"] = torch.sigmoid(logit)
             elif self.task_type == "binary":
                 task_loss = F.cross_entropy(logit, y_true)
@@ -709,6 +712,26 @@ def main(argv: Optional[List[str]] = None):
 
     # ---- Compute class weights for imbalanced multiclass tasks ----
     class_weights = None
+    pos_weight = None
+    if task_spec.task_type == "multilabel":
+        # Per-label sqrt inverse-frequency pos_weight for BCE.
+        # Labels with rare positives (e.g. GI hemorrhage 1.2%) get up-weighted.
+        label_key = task_spec.label_key
+        n_labels = task_spec.label_dim
+        pos_counts = torch.zeros(n_labels)
+        n_total = 0
+        for batch in train_loader:
+            y = batch[label_key]
+            pos_counts += y.sum(dim=0)
+            n_total += y.shape[0]
+        neg_counts = n_total - pos_counts
+        # pos_weight = sqrt(neg / pos), clipped so a single positive label
+        # cannot blow the loss up.
+        ratio = neg_counts / pos_counts.clamp(min=1.0)
+        pw = ratio.clamp(min=1.0).sqrt().clamp(max=10.0)
+        pos_weight = pw.to(device)
+        print(f"[train] Label positive rates: {(pos_counts / max(n_total, 1)).tolist()}")
+        print(f"[train] BCE pos_weight (sqrt, clipped): {pw.tolist()}")
     if task_spec.task_type == "multiclass":
         from collections import Counter
         label_key = task_spec.label_key
@@ -729,7 +752,7 @@ def main(argv: Optional[List[str]] = None):
 
     # ---- Build model ----
     print(f"[train] RL algorithm: {rl_algo}")
-    model = ClinicalRLModel(task_spec, class_weights=class_weights, rl_algo=rl_algo).to(device)
+    model = ClinicalRLModel(task_spec, class_weights=class_weights, pos_weight=pos_weight, rl_algo=rl_algo).to(device)
     n_params = count_parameters(model)
     print(f"[train] Model parameters: {n_params:,}")
 
