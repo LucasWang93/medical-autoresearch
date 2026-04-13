@@ -76,7 +76,7 @@ BATCH_SIZE = 128
 MAX_GRAD_NORM = 1.0
 
 # Input augmentation
-CODE_MASK_RATE = 0.15  # randomly zero out 15% of medical codes during training
+CODE_MASK_RATE = 0.1  # randomly zero out 10% of medical codes during training
 
 # Reproducibility
 SEED = 42
