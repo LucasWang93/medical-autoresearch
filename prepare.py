@@ -1216,6 +1216,130 @@ _MIMIC4_MAX_DRUG_CODES = 300    # top 300 drug names
 # LOS buckets (days): <3, 3-7, 7-14, >14
 _MIMIC4_LOS_BINS = [3.0, 7.0, 14.0]
 
+# 25 acute-care phenotypes from Harutyunyan et al. 2019 (HCUP CCS groupings).
+# We approximate the CCS mapping with ICD-9 / ICD-10 prefix rules rather than
+# using the official HCUP files, so label counts will differ slightly from the
+# MIMIC-III benchmark. Semantics and evaluation protocol match the paper.
+_MIMIC4_PHENOTYPES = [
+    "acute_renal_failure",
+    "acute_cerebrovascular",
+    "acute_mi",
+    "cardiac_dysrhythmias",
+    "chronic_kidney_disease",
+    "copd",
+    "complications_of_care",
+    "conduction_disorders",
+    "chf",
+    "coronary_atherosclerosis",
+    "dm_complicated",
+    "dm_uncomplicated",
+    "lipid_metabolism",
+    "essential_hypertension",
+    "fluid_electrolyte",
+    "gi_hemorrhage",
+    "hypertension_complicated",
+    "liver_disease",
+    "other_lower_respiratory",
+    "other_upper_respiratory",
+    "pleurisy_pneumothorax",
+    "pneumonia",
+    "respiratory_failure",
+    "septicemia",
+    "shock",
+]
+_MIMIC4_N_PHENOTYPES = len(_MIMIC4_PHENOTYPES)
+
+
+def _icd_to_phenotypes(code: str, version: Optional[int] = None) -> List[int]:
+    """Map an ICD-9 or ICD-10 code string to Harutyunyan phenotype indices.
+
+    `version` should be 9 or 10 when known (e.g. from the MIMIC-IV
+    ``icd_version`` column). Without it, we fall back to a shape heuristic
+    that can misclassify ICD-10 E/V codes.
+    """
+    if not code:
+        return []
+    c = code.strip().upper().replace(".", "")
+    if not c:
+        return []
+    result: List[int] = []
+    if version == 10:
+        is_icd10 = True
+    elif version == 9:
+        is_icd10 = False
+    else:
+        is_icd10 = c[0].isalpha() and c[0] not in ("V", "E")
+
+    if is_icd10:
+        h3 = c[:3]
+        if h3 == "N17": result.append(0)
+        if h3 in ("I60", "I61", "I62", "I63", "I65", "I66", "G45", "G46"): result.append(1)
+        if h3 in ("I21", "I22"): result.append(2)
+        if h3 in ("I47", "I48", "I49"): result.append(3)
+        if h3 == "N18": result.append(4)
+        if h3 in ("J40", "J41", "J42", "J43", "J44", "J45", "J46", "J47"): result.append(5)
+        if "T80" <= h3 <= "T88": result.append(6)
+        if h3 in ("I44", "I45"): result.append(7)
+        if h3 == "I50": result.append(8)
+        if h3 == "I25": result.append(9)
+        if h3 in ("E10", "E11"):
+            suf = c[3:4]
+            if suf == "9":
+                result.append(11)
+            else:
+                result.append(10)
+        if h3 == "E78": result.append(12)
+        if h3 == "I10": result.append(13)
+        if h3 in ("E86", "E87"): result.append(14)
+        if h3 == "K92" and len(c) >= 4 and c[3] in ("0", "1", "2"): result.append(15)
+        if h3 in ("I11", "I12", "I13", "I14", "I15"): result.append(16)
+        if "K70" <= h3 <= "K77": result.append(17)
+        if h3 == "J96": result.append(22)
+        if h3 in ("J80", "J81", "J82", "J84", "J98"): result.append(18)
+        if "J30" <= h3 <= "J39": result.append(19)
+        if h3 in ("J90", "J91", "J92", "J93", "J94"): result.append(20)
+        if "J12" <= h3 <= "J18": result.append(21)
+        if h3 in ("A40", "A41"): result.append(23)
+        if h3 == "R57": result.append(24)
+    else:
+        h3 = c[:3]
+        if h3 == "584": result.append(0)
+        if "430" <= h3 <= "438": result.append(1)
+        if h3 == "410": result.append(2)
+        if h3 == "427": result.append(3)
+        if h3 == "585": result.append(4)
+        if "490" <= h3 <= "496": result.append(5)
+        if "996" <= h3 <= "999": result.append(6)
+        if h3 == "426": result.append(7)
+        if h3 == "428": result.append(8)
+        if h3 == "414": result.append(9)
+        if h3 == "250":
+            suf = c[3:4] if len(c) >= 4 else "0"
+            if suf == "0":
+                result.append(11)
+            else:
+                result.append(10)
+        if h3 == "272": result.append(12)
+        if h3 == "401": result.append(13)
+        if h3 == "276": result.append(14)
+        if h3 == "578": result.append(15)
+        if "402" <= h3 <= "405": result.append(16)
+        if "570" <= h3 <= "573": result.append(17)
+        if h3 == "518":
+            if c[:5] in ("51881", "51882", "51884"):
+                result.append(22)
+            else:
+                result.append(18)
+        if h3 == "519": result.append(18)
+        if h3 == "799" and c[:4] == "7991": result.append(22)
+        if "460" <= h3 <= "478": result.append(19)
+        if h3 in ("511", "512"): result.append(20)
+        if "480" <= h3 <= "486": result.append(21)
+        if h3 == "038": result.append(23)
+        if c[:4] in ("7855", "9980"): result.append(24)
+
+    return result
+
 
 class MIMIC4Dataset(Dataset):
     """MIMIC-IV dataset loader — reads CSV.gz directly without PyHealth.
@@ -1273,16 +1397,32 @@ class MIMIC4Dataset(Dataset):
         hadm_ids = set(adm["hadm_id"].values)
 
         # ---- 2. Load diagnoses ----
+        need_phenotypes = task_spec.name == "mimic4_phenotyping"
+        diag_cols = ["hadm_id", "icd_code"]
+        if need_phenotypes:
+            diag_cols.append("icd_version")
         diag_kw: Dict[str, Any] = {}
         if dev or max_patients > 0:
             diag_kw["nrows"] = 200000  # ~enough for dev subset
         diag = pd.read_csv(
             os.path.join(root, "hosp", "diagnoses_icd.csv.gz"),
-            usecols=["hadm_id", "icd_code"],
+            usecols=diag_cols,
             **diag_kw,
         )
         diag = diag[diag["hadm_id"].isin(hadm_ids)]
         diag["icd_code"] = diag["icd_code"].astype(str)
+
+        # ---- 2b. Compute phenotype labels from UNFILTERED diagnoses ----
+        # Must happen before top-N filtering so we don't lose rare codes
+        # that are diagnostic for specific phenotypes.
+        phenotype_per_hadm: Dict[int, List[int]] = {}
+        if need_phenotypes:
+            for hadm_id, group in diag.groupby("hadm_id"):
+                phens: set = set()
+                for code, ver in zip(group["icd_code"], group["icd_version"]):
+                    phens.update(_icd_to_phenotypes(str(code), int(ver)))
+                if phens:
+                    phenotype_per_hadm[int(hadm_id)] = sorted(phens)
 
         # Build top-N diagnosis vocabulary
         diag_counts = diag["icd_code"].value_counts()
@@ -1424,6 +1564,18 @@ class MIMIC4Dataset(Dataset):
                     for d in target:
                         multihot[d] = 1.0
                     sample["drugs"] = multihot
+                elif task_spec.label_key == "phenotypes":
+                    # Forecast phenotypes of visit t from prior history only —
+                    # including visit t's own diagnoses would make the label
+                    # trivially readable from the features.
+                    sample["conditions"] = visit_diags[:t]
+                    sample["procedures"] = visit_procs[:t]
+                    hid = int(v["hadm_id"])
+                    target = phenotype_per_hadm.get(hid, [])
+                    multihot = np.zeros(_MIMIC4_N_PHENOTYPES, dtype=np.float32)
+                    for p in target:
+                        multihot[p] = 1.0
+                    sample["phenotypes"] = multihot
 
                 self.samples.append(sample)
 
@@ -1540,6 +1692,27 @@ TaskRegistry.register(TaskSpec(
     reward_components={"f1_macro": 1.0},
     pyhealth_dataset="mimic4",
     pyhealth_task="length_of_stay_prediction",
+))
+
+TaskRegistry.register(TaskSpec(
+    name="mimic4_phenotyping",
+    task_type="multilabel",
+    description=(
+        "Predict 25 acute-care phenotypes (Harutyunyan et al. 2019) for the "
+        "next hospital admission from MIMIC-IV longitudinal history. "
+        "Features use only prior visits; labels are derived from all diagnoses "
+        "of the target visit via ICD-9/10 prefix rules approximating HCUP CCS."
+    ),
+    feature_keys=["conditions", "procedures"],
+    label_key="phenotypes",
+    feature_dims={"conditions": _MIMIC4_MAX_DIAG_CODES + 1, "procedures": _MIMIC4_MAX_PROC_CODES + 1},
+    label_dim=_MIMIC4_N_PHENOTYPES,
+    primary_metric="auroc_macro",
+    metric_direction="max",
+    metrics=["auroc_macro", "f1_samples", "jaccard_samples", "pr_auc_samples"],
+    reward_components={"auroc_macro": 1.0},
+    pyhealth_dataset="mimic4",
+    pyhealth_task="phenotyping",
 ))
 
 TaskRegistry.register(TaskSpec(
@@ -1681,6 +1854,16 @@ def _compute_metric(
             if y_prob.ndim == 1:
                 return 0.5
             try:
+                if spec.task_type == "multilabel":
+                    # Per-label AUROC, averaged over labels with both classes.
+                    n_labels = y_true.shape[1]
+                    aucs = []
+                    for j in range(n_labels):
+                        yt = y_true[:, j]
+                        if len(np.unique(yt)) < 2:
+                            continue
+                        aucs.append(float(roc_auc_score(yt, y_prob[:, j])))
+                    return float(np.mean(aucs)) if aucs else 0.5
                 return float(roc_auc_score(y_true, y_prob, multi_class="ovr", average="macro"))
             except ValueError:
                 return 0.5
