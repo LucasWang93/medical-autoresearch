@@ -39,7 +39,7 @@ TASK_NAME = "mimic4_los"
 
 # Model architecture
 EMBEDDING_DIM = 128
-HIDDEN_DIM = 256
+HIDDEN_DIM = 384
 NUM_RNN_LAYERS = 2
 DROPOUT = 0.3
 

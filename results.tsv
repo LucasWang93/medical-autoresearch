@@ -47,3 +47,4 @@ e542cd0	7790637	0.532159	-0.011929	1.4	revert	mimic4_los	iter19: batch64 + LR 7e
 15eb004	7793998	0.540701	0.000000	1.4	ref	mimic4_los	iter23 seed=7: multi-seed test (mean=0.540±0.002)
 faa4d59	8122677	0.816473	0.000000	1.4	ref	mimic4_phenotyping	baseline: A2C-GAE default config, 4 epochs, first run on new task
 937dc99	8126401	0.822049	0.005576	1.4	keep	mimic4_phenotyping	iter1: cosine LR + 1800s — val monotonic to 0.825, +0.0056 over baseline
+3434500	8128373	0.828739	0.006690	1.4	keep	mimic4_phenotyping	iter2: BCE pos_weight sqrt inv-freq — +0.0067, broad gains across all metrics
