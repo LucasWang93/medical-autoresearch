@@ -133,7 +133,7 @@ L_total = L_task (CE/BCE) + L_rl (REINFORCE policy gradient)
 | `mimic4_readmission` | 30天再入院预测 | binary | AUROC | **0.669** |
 | `mimic4_los` | 住院时长分类 (<3d/3-7d/7-14d/>14d) | 4-class | F1_macro | **0.481** |
 | `mimic4_drugrec` | 药物推荐 (300种药物) | multilabel | Jaccard | **0.166** |
-| `mimic4_phenotyping` | 下次入院 25 类 Harutyunyan 表型预测 | multilabel | AUROC_macro | _TBD_ |
+| `mimic4_phenotyping` | 下次入院 25 类 Harutyunyan 表型预测 | multilabel | AUROC_macro | **0.816** |
 
 ### SUPPORT2 (9K patients)
 
