@@ -736,9 +736,14 @@ def main(argv: Optional[List[str]] = None):
     optimizer = torch.optim.Adam(
         model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY,
     )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=2,
-    )
+    if task_spec.task_type == "multilabel":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
+        scheduler_uses_score = False
+    else:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="max", factor=0.5, patience=2,
+        )
+        scheduler_uses_score = True
 
     # ---- Training loop with time budget ----
     total_start = time.time()
@@ -803,7 +808,10 @@ def main(argv: Optional[List[str]] = None):
             best_score = score
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
-        scheduler.step(score)
+        if scheduler_uses_score:
+            scheduler.step(score)
+        else:
+            scheduler.step()
 
         # DQN: update target network and decay epsilon
         if rl_algo == "dqn":
