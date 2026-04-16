@@ -1067,11 +1067,11 @@ def main_multitask(argv: Optional[List[str]] = None):
     training_start = time.time()
     step = 0
     epoch = 0
-    steps_per_epoch = max(len(train_loaders[t]) for t in MULTITASK_TASKS) * len(MULTITASK_TASKS)
+    steps_per_epoch = max(len(train_loaders[t]) for t in MULTITASK_TASKS)
     best_combined = -float("inf")
     best_state = None
 
-    print(f"[multitask] Training for {time_budget}s, ~{steps_per_epoch} steps/epoch...")
+    print(f"[multitask] Training for {time_budget}s, ~{steps_per_epoch} steps/epoch...", flush=True)
 
     while time.time() - training_start < time_budget:
         model.train()
@@ -1094,6 +1094,10 @@ def main_multitask(argv: Optional[List[str]] = None):
 
             epoch_losses[tname].append(output["task_loss"].item())
             step += 1
+
+            if step % 500 == 0:
+                elapsed = time.time() - training_start
+                print(f"[multitask]   step {step} | {tname} loss {output['task_loss'].item():.4f} | {elapsed:.0f}s", flush=True)
 
         if step == 0:
             break
@@ -1118,7 +1122,7 @@ def main_multitask(argv: Optional[List[str]] = None):
             f"{t.split('_', 1)[1][:4]} {np.mean(epoch_losses[t]):.4f}/{val_scores[t]:.4f}"
             for t in MULTITASK_TASKS
         )
-        print(f"[multitask] Epoch {epoch:3d} | {loss_strs} | combined {combined:.4f} | best {best_combined:.4f} | {elapsed:.0f}s/{time_budget}s")
+        print(f"[multitask] Epoch {epoch:3d} | {loss_strs} | combined {combined:.4f} | best {best_combined:.4f} | {elapsed:.0f}s/{time_budget}s", flush=True)
 
     training_seconds = time.time() - training_start
 
