@@ -7,6 +7,7 @@ Goal: maximize the primary metric for the chosen task(s).
 """
 
 import argparse
+import itertools
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -310,80 +311,60 @@ class ClinicalRLModel(nn.Module):
             else:
                 self.output_head = nn.Linear(HIDDEN_DIM, task_spec.label_dim)
 
-    def forward(self, **kwargs) -> Dict[str, torch.Tensor]:
+    def encode(self, **kwargs):
+        """Shared encoder: embeddings → GRU → RL history attention → fusion → last_state."""
         device = next(self.parameters()).device
-
-        # 1. Embed and concatenate features
         embedded = []
         for key in self.spec.feature_keys:
             if key in kwargs:
                 embedded.append(self.embeddings[key](kwargs[key]))
-        x = torch.cat(embedded, dim=-1)  # [batch, visits, input_dim]
-
-        mask = kwargs.get("mask")  # [batch, visits]
-
-        # 2. Encode with RNN
-        rnn_out, _ = self.rnn(x)  # [batch, visits, hidden_dim]
+        x = torch.cat(embedded, dim=-1)
+        mask = kwargs.get("mask")
+        rnn_out, _ = self.rnn(x)
         batch_size, seq_len, hidden_dim = rnn_out.shape
 
-        # 3. RL agent: select relevant historical states at each step
         rl_log_probs = []
         rl_entropies = []
         rl_baselines = []
         fused_states = []
 
         for t in range(seq_len):
-            current = rnn_out[:, t, :]  # [batch, hidden_dim]
-
+            current = rnn_out[:, t, :]
             if t == 0:
-                # No history at first step, use current as both
                 fused = self.fusion(torch.cat([current, current], dim=-1))
             else:
-                # Agent selects from history buffer
                 history_len = min(t, N_ACTIONS)
                 history_start = max(0, t - N_ACTIONS)
-                history = rnn_out[:, history_start:t, :]  # [batch, <=N_ACTIONS, hidden]
-
+                history = rnn_out[:, history_start:t, :]
                 action, log_prob, entropy, baseline = self.rl_agent(current)
                 rl_log_probs.append(log_prob)
                 rl_entropies.append(entropy)
                 if baseline is not None:
                     rl_baselines.append(baseline)
-
-                # Clamp action to valid range
                 action_clamped = action.clamp(0, history_len - 1)
-                # Gather selected historical state
                 idx = action_clamped.unsqueeze(-1).unsqueeze(-1).expand(-1, 1, hidden_dim)
-                selected = history.gather(1, idx).squeeze(1)  # [batch, hidden]
-
+                selected = history.gather(1, idx).squeeze(1)
                 fused = self.fusion(torch.cat([current, selected], dim=-1))
-
-                # Store DQN transitions
                 if self.rl_algo == "dqn" and self.training:
                     self.replay_buffer.push_batch(
-                        current.detach().cpu(),
-                        action_clamped.detach().cpu(),
-                        torch.zeros(batch_size),  # reward filled later
-                        rnn_out[:, t, :].detach().cpu(),
+                        current.detach().cpu(), action_clamped.detach().cpu(),
+                        torch.zeros(batch_size), rnn_out[:, t, :].detach().cpu(),
                     )
-
             fused_states.append(fused)
 
-        fused_seq = torch.stack(fused_states, dim=1)  # [batch, visits, hidden]
-
-        # 4. Get last valid state for prediction
+        fused_seq = torch.stack(fused_states, dim=1)
         if mask is not None:
             lengths = mask.long().sum(dim=1).clamp(min=1) - 1
-            last_state = fused_seq[
-                torch.arange(batch_size, device=device), lengths
-            ]
+            last_state = fused_seq[torch.arange(batch_size, device=device), lengths]
         else:
             last_state = fused_seq[:, -1, :]
+        return last_state, rl_log_probs, rl_entropies, rl_baselines
 
-        # 5. Predict
+    def forward(self, **kwargs) -> Dict[str, torch.Tensor]:
+        last_state, rl_log_probs, rl_entropies, rl_baselines = self.encode(**kwargs)
         logit = self.output_head(last_state)
 
-        # 6. Compute loss
+        # Compute loss
         result = {"logit": logit}
 
         if self.label_key in kwargs:
@@ -630,6 +611,114 @@ class ClinicalRLModel(nn.Module):
 
 
 # ============================================================
+# Multi-Task Wrapper
+# ============================================================
+
+MULTITASK_TASKS = [
+    "mimic4_mortality",
+    "mimic4_readmission",
+    "mimic4_los",
+    "mimic4_phenotyping",
+]
+
+
+class MultiTaskWrapper(nn.Module):
+    """Shared encoder + per-task output heads for multi-task learning."""
+
+    def __init__(
+        self,
+        task_specs: Dict[str, TaskSpec],
+        class_weights: Dict[str, Optional[torch.Tensor]],
+        pos_weights: Dict[str, Optional[torch.Tensor]],
+        rl_algo: str = "a2c_gae",
+    ):
+        super().__init__()
+        self.task_specs = task_specs
+        ref_spec = list(task_specs.values())[0]
+        self.encoder = ClinicalRLModel(ref_spec, rl_algo=rl_algo)
+
+        self.heads = nn.ModuleDict()
+        self._class_weights = {}
+        self._pos_weights = {}
+        for name, spec in task_specs.items():
+            if spec.task_type == "multilabel":
+                self.heads[name] = nn.Linear(HIDDEN_DIM, spec.label_dim)
+            elif spec.task_type == "binary":
+                self.heads[name] = nn.Linear(HIDDEN_DIM, 2)
+            elif spec.task_type == "multiclass":
+                self.heads[name] = nn.Linear(HIDDEN_DIM, spec.label_dim)
+            self._class_weights[name] = class_weights.get(name)
+            self._pos_weights[name] = pos_weights.get(name)
+
+    def forward_task(self, task_name: str, **kwargs) -> Dict[str, torch.Tensor]:
+        spec = self.task_specs[task_name]
+        old_task_type = self.encoder.task_type
+        old_label_key = self.encoder.label_key
+        self.encoder.task_type = spec.task_type
+        self.encoder.label_key = spec.label_key
+
+        last_state, rl_log_probs, rl_entropies, rl_baselines = self.encoder.encode(**kwargs)
+
+        self.encoder.task_type = old_task_type
+        self.encoder.label_key = old_label_key
+
+        logit = self.heads[task_name](last_state)
+        result = {"logit": logit}
+
+        if spec.label_key in kwargs:
+            y_true = kwargs[spec.label_key]
+            result["y_true"] = y_true
+
+            if spec.task_type == "multilabel":
+                task_loss = F.binary_cross_entropy_with_logits(
+                    logit, y_true, pos_weight=self._pos_weights.get(task_name),
+                )
+                result["y_prob"] = torch.sigmoid(logit)
+            elif spec.task_type == "binary":
+                task_loss = F.cross_entropy(logit, y_true)
+                result["y_prob"] = F.softmax(logit, dim=-1)[:, 1]
+            elif spec.task_type == "multiclass":
+                task_loss = F.cross_entropy(
+                    logit, y_true, weight=self._class_weights.get(task_name),
+                )
+                result["y_prob"] = F.softmax(logit, dim=-1)
+
+            old_tt = self.encoder.task_type
+            self.encoder.task_type = spec.task_type
+            rl_loss = self.encoder._compute_rl_loss(
+                rl_log_probs, rl_entropies, rl_baselines,
+                task_loss.detach(), y_true, logit.detach(),
+            )
+            self.encoder.task_type = old_tt
+
+            result["loss"] = task_loss + RL_LOSS_COEF * rl_loss
+            result["task_loss"] = task_loss.detach()
+            result["rl_loss"] = rl_loss.detach()
+
+        return result
+
+
+class _EvalWrapper(nn.Module):
+    """Wraps MultiTaskWrapper so evaluate_model() can call model(**batch)."""
+
+    def __init__(self, mt_wrapper: MultiTaskWrapper, task_name: str):
+        super().__init__()
+        self.mt = mt_wrapper
+        self.task_name = task_name
+
+    def forward(self, **kwargs):
+        return self.mt.forward_task(self.task_name, **kwargs)
+
+    def eval(self):
+        self.mt.eval()
+        return self
+
+    def train(self, mode=True):
+        self.mt.train(mode)
+        return self
+
+
+# ============================================================
 # Reward Shaping — agent modifies reward design
 # ============================================================
 
@@ -677,6 +766,8 @@ def parse_args(argv: Optional[List[str]] = None):
     parser.add_argument("--rl-algo", type=str, default=None,
                         choices=["reinforce", "ppo", "a2c_gae", "dqn"],
                         help="Override RL algorithm")
+    parser.add_argument("--multitask", action="store_true",
+                        help="Run multi-task learning on 4 MIMIC-IV tasks")
     return parser.parse_args(argv)
 
 
@@ -896,5 +987,172 @@ def main(argv: Optional[List[str]] = None):
     )
 
 
+def main_multitask(argv: Optional[List[str]] = None):
+    args = parse_args(argv)
+    time_budget = TIME_BUDGET_SECONDS if args.time_budget is None else args.time_budget
+    batch_size = BATCH_SIZE if args.batch_size is None else args.batch_size
+    rl_algo = args.rl_algo or RL_ALGO
+    seed = args.seed if args.seed is not None else SEED
+    set_seed(seed)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+    print(f"[multitask] Seed: {seed}, device: {device}")
+    print(f"[multitask] Tasks: {MULTITASK_TASKS}")
+
+    # Load all tasks
+    task_specs: Dict[str, TaskSpec] = {}
+    val_loaders: Dict[str, object] = {}
+    test_loaders: Dict[str, object] = {}
+    train_loaders: Dict[str, object] = {}
+
+    for tname in MULTITASK_TASKS:
+        spec, tr, va, te = load_task_data(tname, batch_size=batch_size, return_spec=True)
+        task_specs[tname] = spec
+        train_loaders[tname] = tr
+        val_loaders[tname] = va
+        test_loaders[tname] = te
+        print(f"[multitask]   {tname}: {len(tr.dataset)} train, {len(va.dataset)} val, {len(te.dataset)} test")
+
+    # Compute per-task class_weights / pos_weights
+    all_class_weights: Dict[str, Optional[torch.Tensor]] = {}
+    all_pos_weights: Dict[str, Optional[torch.Tensor]] = {}
+    for tname, spec in task_specs.items():
+        if spec.task_type == "multilabel":
+            pos_counts = torch.zeros(spec.label_dim)
+            n_total = 0
+            for batch in train_loaders[tname]:
+                y = batch[spec.label_key]
+                pos_counts += y.sum(dim=0)
+                n_total += y.shape[0]
+            neg_counts = n_total - pos_counts
+            ratio = neg_counts / pos_counts.clamp(min=1.0)
+            pw = ratio.clamp(min=1.0).sqrt().clamp(max=10.0).to(device)
+            all_pos_weights[tname] = pw
+            all_class_weights[tname] = None
+        elif spec.task_type == "multiclass":
+            from collections import Counter
+            all_labels = []
+            for batch in train_loaders[tname]:
+                all_labels.append(batch[spec.label_key].numpy())
+            all_labels = np.concatenate(all_labels)
+            counts = Counter(all_labels.tolist())
+            total = len(all_labels)
+            weights = torch.zeros(spec.label_dim)
+            for c in range(spec.label_dim):
+                weights[c] = (total / (spec.label_dim * max(counts.get(c, 1), 1))) ** 0.5
+            all_class_weights[tname] = weights.to(device)
+            all_pos_weights[tname] = None
+        else:
+            all_class_weights[tname] = None
+            all_pos_weights[tname] = None
+
+    # Build multi-task model
+    model = MultiTaskWrapper(task_specs, all_class_weights, all_pos_weights, rl_algo=rl_algo).to(device)
+    n_params = count_parameters(model)
+    print(f"[multitask] Parameters: {n_params:,}")
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+
+    # Round-robin infinite iterators
+    task_iters = {}
+    for tname in MULTITASK_TASKS:
+        task_iters[tname] = iter(itertools.cycle(train_loaders[tname]))
+
+    # Training loop
+    total_start = time.time()
+    training_start = time.time()
+    step = 0
+    epoch = 0
+    steps_per_epoch = max(len(train_loaders[t]) for t in MULTITASK_TASKS) * len(MULTITASK_TASKS)
+    best_combined = -float("inf")
+    best_state = None
+
+    print(f"[multitask] Training for {time_budget}s, ~{steps_per_epoch} steps/epoch...")
+
+    while time.time() - training_start < time_budget:
+        model.train()
+        epoch_losses = {t: [] for t in MULTITASK_TASKS}
+
+        for i in range(steps_per_epoch):
+            if time.time() - training_start >= time_budget:
+                break
+            tname = MULTITASK_TASKS[i % len(MULTITASK_TASKS)]
+            batch = next(task_iters[tname])
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+
+            optimizer.zero_grad()
+            output = model.forward_task(tname, **batch)
+            loss = output["loss"]
+            loss.backward()
+            if MAX_GRAD_NORM > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), MAX_GRAD_NORM)
+            optimizer.step()
+
+            epoch_losses[tname].append(output["task_loss"].item())
+            step += 1
+
+        if step == 0:
+            break
+
+        epoch += 1
+        scheduler.step()
+
+        # Validate all tasks
+        val_scores = {}
+        for tname, spec in task_specs.items():
+            wrapper = _EvalWrapper(model, tname)
+            metrics = evaluate_model(wrapper, val_loaders[tname], spec, device)
+            val_scores[tname] = metrics.get(spec.primary_metric, 0.0)
+
+        combined = np.mean(list(val_scores.values()))
+        if combined > best_combined:
+            best_combined = combined
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+
+        elapsed = time.time() - training_start
+        loss_strs = " | ".join(
+            f"{t.split('_', 1)[1][:4]} {np.mean(epoch_losses[t]):.4f}/{val_scores[t]:.4f}"
+            for t in MULTITASK_TASKS
+        )
+        print(f"[multitask] Epoch {epoch:3d} | {loss_strs} | combined {combined:.4f} | best {best_combined:.4f} | {elapsed:.0f}s/{time_budget}s")
+
+    training_seconds = time.time() - training_start
+
+    # Load best & test
+    if best_state is not None:
+        model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
+
+    print("\n===== Multi-Task Test Results =====")
+    for tname, spec in task_specs.items():
+        wrapper = _EvalWrapper(model, tname)
+        test_metrics = evaluate_model(wrapper, test_loaders[tname], spec, device)
+        score = test_metrics.get(spec.primary_metric, 0.0)
+        print(f"  {tname}: {spec.primary_metric} = {score:.4f}")
+        for k, v in sorted(test_metrics.items()):
+            if k != spec.primary_metric:
+                print(f"    {k} = {v:.4f}")
+
+    total_seconds = time.time() - total_start
+    print(f"\n[multitask] {epoch} epochs, {step} steps, {training_seconds:.0f}s training, {total_seconds:.0f}s total")
+    print(f"[multitask] Peak VRAM: {get_peak_vram_mb():.0f} MB")
+    print(f"[multitask] Parameters: {n_params:,}")
+    print(f"[multitask] Best combined val score: {best_combined:.4f}")
+
+    # Print in a format the loop can parse
+    for tname, spec in task_specs.items():
+        wrapper = _EvalWrapper(model, tname)
+        test_metrics = evaluate_model(wrapper, test_loaders[tname], spec, device)
+        score = test_metrics.get(spec.primary_metric, 0.0)
+        print(f"primary_metric\t{tname}\t{score:.6f}")
+
+
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    if getattr(args, "multitask", False):
+        main_multitask()
+    else:
+        main()
