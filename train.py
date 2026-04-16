@@ -1116,6 +1116,7 @@ def main_multitask(argv: Optional[List[str]] = None):
         if combined > best_combined:
             best_combined = combined
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            torch.save(best_state, "results/multitask_best.pt")
 
         elapsed = time.time() - training_start
         loss_strs = " | ".join(
