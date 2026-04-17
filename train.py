@@ -1070,7 +1070,7 @@ def main_multitask(argv: Optional[List[str]] = None):
     print(f"[multitask] Parameters: {n_params:,}")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=25)
 
     # Round-robin infinite iterators
     task_iters = {}
