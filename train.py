@@ -40,7 +40,7 @@ TASK_NAME = "mimic4_los"
 
 # Model architecture
 EMBEDDING_DIM = 128
-HIDDEN_DIM = 256
+HIDDEN_DIM = 384
 NUM_RNN_LAYERS = 2
 DROPOUT = 0.3
 
@@ -654,15 +654,13 @@ class MultiTaskWrapper(nn.Module):
         self.heads = nn.ModuleDict()
         self._class_weights = {}
         self._pos_weights = {}
-        adapter_dim = 128
         for name, spec in task_specs.items():
-            out_dim = spec.label_dim if spec.task_type != "binary" else 2
-            self.heads[name] = nn.Sequential(
-                nn.Linear(HIDDEN_DIM, adapter_dim),
-                nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(adapter_dim, out_dim),
-            )
+            if spec.task_type == "multilabel":
+                self.heads[name] = nn.Linear(HIDDEN_DIM, spec.label_dim)
+            elif spec.task_type == "binary":
+                self.heads[name] = nn.Linear(HIDDEN_DIM, 2)
+            elif spec.task_type == "multiclass":
+                self.heads[name] = nn.Linear(HIDDEN_DIM, spec.label_dim)
             self._class_weights[name] = class_weights.get(name)
             self._pos_weights[name] = pos_weights.get(name)
 
