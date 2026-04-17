@@ -625,7 +625,7 @@ TASK_LOSS_WEIGHTS = {
     "mimic4_mortality": 1.0,
     "mimic4_readmission": 1.0,
     "mimic4_los": 1.5,
-    "mimic4_phenotyping": 2.0,
+    "mimic4_phenotyping": 3.0,
 }
 
 TASK_SAMPLE_WEIGHTS = {
