@@ -621,6 +621,13 @@ MULTITASK_TASKS = [
     "mimic4_phenotyping",
 ]
 
+TASK_LOSS_WEIGHTS = {
+    "mimic4_mortality": 1.0,
+    "mimic4_readmission": 1.0,
+    "mimic4_los": 1.5,
+    "mimic4_phenotyping": 2.0,
+}
+
 
 class MultiTaskWrapper(nn.Module):
     """Shared encoder + per-task output heads for multi-task learning."""
@@ -691,7 +698,8 @@ class MultiTaskWrapper(nn.Module):
             )
             self.encoder.task_type = old_tt
 
-            result["loss"] = task_loss + RL_LOSS_COEF * rl_loss
+            tw = TASK_LOSS_WEIGHTS.get(task_name, 1.0)
+            result["loss"] = tw * task_loss + RL_LOSS_COEF * rl_loss
             result["task_loss"] = task_loss.detach()
             result["rl_loss"] = rl_loss.detach()
 
