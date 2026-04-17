@@ -622,10 +622,17 @@ MULTITASK_TASKS = [
 ]
 
 TASK_LOSS_WEIGHTS = {
-    "mimic4_mortality": 1.0,
+    "mimic4_mortality": 0.8,
     "mimic4_readmission": 1.0,
     "mimic4_los": 1.5,
-    "mimic4_phenotyping": 2.0,
+    "mimic4_phenotyping": 3.0,
+}
+
+TASK_SAMPLE_WEIGHTS = {
+    "mimic4_mortality": 1,
+    "mimic4_readmission": 1,
+    "mimic4_los": 1,
+    "mimic4_phenotyping": 2,
 }
 
 
@@ -1085,10 +1092,14 @@ def main_multitask(argv: Optional[List[str]] = None):
         model.train()
         epoch_losses = {t: [] for t in MULTITASK_TASKS}
 
+        task_schedule = []
+        for t in MULTITASK_TASKS:
+            task_schedule.extend([t] * TASK_SAMPLE_WEIGHTS.get(t, 1))
+
         for i in range(steps_per_epoch):
             if time.time() - training_start >= time_budget:
                 break
-            tname = MULTITASK_TASKS[i % len(MULTITASK_TASKS)]
+            tname = task_schedule[i % len(task_schedule)]
             batch = next(task_iters[tname])
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
