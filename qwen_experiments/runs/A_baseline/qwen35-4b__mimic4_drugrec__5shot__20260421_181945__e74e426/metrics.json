@@ -1,0 +1,8 @@
+{
+  "n": 500,
+  "n_parseable": 209,
+  "parse_rate": 0.418,
+  "jaccard_samples": 0.0788162256222308,
+  "f1_samples": 0.0795635194800712,
+  "mean_reward": 0.025716225622230807
+}

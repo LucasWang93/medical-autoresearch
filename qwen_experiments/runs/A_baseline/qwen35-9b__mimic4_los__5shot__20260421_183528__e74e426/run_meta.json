@@ -1,0 +1,50 @@
+{
+  "track": "A_baseline",
+  "run_id": "qwen35-9b__mimic4_los__5shot__20260421_183528__e74e426",
+  "model_path": "/nfs/roberts/project/pi_yz875/sw2572/models/Qwen3.5-9B",
+  "model_tag": "qwen35-9b",
+  "task": "mimic4_los",
+  "shots": 5,
+  "iter": null,
+  "seed": 42,
+  "git_sha": "e74e426",
+  "job_id": "9131207",
+  "host": "a1124u11n01.mghpcc.ycrc.yale.edu",
+  "cuda_visible_devices": "0",
+  "partition": "gpu_h200",
+  "argv": [
+    "/nfs/roberts/project/pi_yz875/sw2572/codes/auto-research-health/medical-autoresearch/qwen_experiments/src/baseline_fewshot.py",
+    "--model-tag",
+    "qwen35-9b",
+    "--task",
+    "mimic4_los",
+    "--shots",
+    "5",
+    "--n-eval",
+    "500"
+  ],
+  "args": {
+    "model_tag": "qwen35-9b",
+    "task": "mimic4_los",
+    "shots": 5,
+    "n_eval": 500,
+    "max_visits": 10,
+    "max_codes_per_visit": 20,
+    "seed": 42,
+    "max_mem_gib_per_gpu": 0
+  },
+  "notes": "",
+  "start_time": "2026-04-21T18:35:28",
+  "end_time": "2026-04-21T18:38:36",
+  "duration_s": 188,
+  "metrics": {
+    "n": 500,
+    "n_parseable": 500,
+    "parse_rate": 1.0,
+    "accuracy": 0.316,
+    "f1_macro": 0.15758818883818884,
+    "f1_weighted": 0.2316431203931204,
+    "auroc_macro": 0.5414442875013167,
+    "mean_reward": 0.7966666666666667
+  }
+}
