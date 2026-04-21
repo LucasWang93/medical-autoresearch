@@ -1497,6 +1497,11 @@ class MIMIC4Dataset(Dataset):
         self.diag_vocab_size = len(diag_vocab) + 1  # +1 for padding
         self.proc_vocab_size = len(proc_vocab) + 1
         self.drug_vocab_size = len(drug_vocab) if drug_vocab else 0
+        # Expose vocab mappings for downstream consumers that need string codes
+        # (e.g. the Qwen LLM experiments in qwen_experiments/).
+        self.diag_vocab = dict(diag_vocab)
+        self.proc_vocab = dict(proc_vocab)
+        self.drug_vocab = dict(drug_vocab) if drug_vocab else {}
 
         self.samples: List[Dict[str, Any]] = []
         patients = adm.groupby("subject_id")

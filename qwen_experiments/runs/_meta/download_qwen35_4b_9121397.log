@@ -1,0 +1,7 @@
+Downloading Qwen3.5-4B to /nfs/roberts/project/pi_yz875/sw2572/models/Qwen3.5-4B
+Node: a1132u09n04.mghpcc.ycrc.yale.edu  Job: 9121397  Time: Tue Apr 21 16:39:23 EDT 2026
+Fetching 14 files:   0%|          | 0/14 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 14 files:  50%|█████     | 7/14 [00:11<00:11,  1.63s/it]Fetching 14 files: 100%|██████████| 14/14 [00:11<00:00,  1.23it/s]
+/nfs/roberts/project/pi_yz875/sw2572/models/Qwen3.5-4B
+Download complete. Final size:
+8.8G	/nfs/roberts/project/pi_yz875/sw2572/models/Qwen3.5-4B
