@@ -1,0 +1,8 @@
+# Large generated artifacts
+.cache/
+runs/*/*/lora_adapter*/
+runs/*/*/predictions.jsonl
+# Slurm stdout logs can be big; keep the small _meta logs only as-needed
+runs/_meta/*.log
+__pycache__/
+*.pyc
