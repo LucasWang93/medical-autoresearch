@@ -1,0 +1,8 @@
+{
+  "n": 8,
+  "n_parseable": 8,
+  "parse_rate": 1.0,
+  "accuracy": 0.0,
+  "f1": 0.0,
+  "mean_reward": 0.05
+}

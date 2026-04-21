@@ -1,0 +1,4 @@
+timestamp	run_id	track	model	task	shots	iter	metric	value	delta_vs_ref	git_sha	job_id	host	seed	notes
+2026-04-21T18:01:29	qwen35-4b__mimic4_mortality__0shot__20260421_180129__b313e06	A_baseline	qwen35-4b	mimic4_mortality	0		auroc			b313e06	9130706	a1126u19n01.mghpcc.ycrc.yale.edu	42	n=8 parse=1.00
+2026-04-21T18:04:07	qwen35-4b__mimic4_mortality__0shot__20260421_180407__170a954	A_baseline	qwen35-4b	mimic4_mortality	0		auroc			170a954	9130952	a1126u19n01.mghpcc.ycrc.yale.edu	42	n=8 parse=1.00
+2026-04-21T18:04:39	qwen35-4b__mimic4_mortality__iter00__smoke__20260421_180439__170a954	B_single	qwen35-4b	mimic4_mortality		0	auroc			170a954	9130952	a1126u19n01.mghpcc.ycrc.yale.edu	42	G=4 kl=0.04 steps=3 lr=1e-05 tag=smoke
