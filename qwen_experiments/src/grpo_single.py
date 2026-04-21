@@ -259,7 +259,7 @@ def main():
             m["step"] = step
             m["eval_secs"] = round(time.time() - t_eval, 1)
             train_log.write({"event": "eval", **m})
-            now_log("eval", step=step, **m)
+            now_log("eval", **m)
             if primary in m and m[primary] > best_primary:
                 best_primary = m[primary]
                 best_metrics = m
