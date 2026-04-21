@@ -49,7 +49,7 @@ def load_model_for_inference(
 ):
     cls, _ = resolve_model_class()
     kw = dict(
-        torch_dtype=dtype,
+        dtype=dtype,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
         attn_implementation=attn_impl,
@@ -77,7 +77,7 @@ def load_model_for_training(
 ):
     cls, _ = resolve_model_class()
     kw = dict(
-        torch_dtype=dtype,
+        dtype=dtype,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
         attn_implementation=attn_impl,

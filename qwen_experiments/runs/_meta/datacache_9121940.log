@@ -5,3 +5,20 @@
 [MIMIC-IV] Loaded 322576 samples from 223452 patients (mimic4_readmission)
 [mimic4_readmission] samples: 322576
 === Building cache for mimic4_los ===
+[MIMIC-IV] Loaded 322576 samples from 223452 patients (mimic4_los)
+[mimic4_los] samples: 322576
+=== Building cache for mimic4_phenotyping ===
+[MIMIC-IV] Loaded 322576 samples from 223452 patients (mimic4_phenotyping)
+[mimic4_phenotyping] samples: 322576
+=== Building cache for mimic4_drugrec ===
+[MIMIC-IV] Loaded 322576 samples from 223452 patients (mimic4_drugrec)
+[mimic4_drugrec] samples: 322576
+Caches built:
+total 2020279
+drwxrwsr-x 2 sw2572 pi_yz875       4096 Apr 21 16:55 .
+drwxrwsr-x 2 sw2572 pi_yz875       4096 Apr 21 16:46 ..
+-rw-rw-r-- 1 sw2572 pi_yz875 1006545409 Apr 21 16:55 mimic4_drugrec.jsonl
+-rw-rw-r-- 1 sw2572 pi_yz875  266952956 Apr 21 16:50 mimic4_los.jsonl
+-rw-rw-r-- 1 sw2572 pi_yz875  268888412 Apr 21 16:46 mimic4_mortality.jsonl
+-rw-rw-r-- 1 sw2572 pi_yz875  256843485 Apr 21 16:52 mimic4_phenotyping.jsonl
+-rw-rw-r-- 1 sw2572 pi_yz875  269533564 Apr 21 16:48 mimic4_readmission.jsonl
