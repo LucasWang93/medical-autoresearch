@@ -1,0 +1,17 @@
+{
+  "best_combined": 0.4102334562897195,
+  "best_per_task": {
+    "mimic4_mortality": 0.8232323232323232,
+    "mimic4_readmission": 0.5061728395061729,
+    "mimic4_los": 0.18152866242038215,
+    "mimic4_phenotyping": 0.13
+  },
+  "train_steps": 400,
+  "final_gpu_usage": [
+    {
+      "gpu": 0,
+      "allocated_gib": 9.02,
+      "reserved_gib": 49.41
+    }
+  ]
+}
