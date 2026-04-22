@@ -229,24 +229,22 @@ def main():
             (out["loss"] / args.prompts_per_step).backward()
             step_stats.append({k: float(v) for k, v in out["stats"].items()})
 
-        if not step_stats:
-            # empty step → just zero grad and move on
-            continue
-        torch.nn.utils.clip_grad_norm_(trainable, args.max_grad_norm)
-        optim.step()
-        sched.step()
+        if step_stats:
+            torch.nn.utils.clip_grad_norm_(trainable, args.max_grad_norm)
+            optim.step()
+            sched.step()
 
-        row = {
-            "step": step,
-            "lr": sched.get_last_lr()[0],
-            "elapsed_s": round(time.time() - step_start, 1),
-        }
-        keys = step_stats[0].keys()
-        for k in keys:
-            row[k] = float(np.mean([ss[k] for ss in step_stats]))
-        train_log.write(row)
-        if step % 5 == 0 or step == 1:
-            now_log("step", **row)
+            row = {
+                "step": step,
+                "lr": sched.get_last_lr()[0],
+                "elapsed_s": round(time.time() - step_start, 1),
+            }
+            keys = step_stats[0].keys()
+            for k in keys:
+                row[k] = float(np.mean([ss[k] for ss in step_stats]))
+            train_log.write(row)
+            if step % 5 == 0 or step == 1:
+                now_log("step", **row)
 
         if step % args.eval_every == 0 or step == args.total_steps:
             now_log("eval_start", step=step)
