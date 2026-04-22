@@ -385,7 +385,7 @@ def main():
     primary = primary_metric_name(args.task)
     ref = REFERENCE_BEST.get(args.task, {})
     delta = ""
-    if primary in metrics and "gru_baseline" in ref:
+    if primary in metrics and ref.get("gru_baseline") is not None:
         delta = round(metrics[primary] - ref["gru_baseline"], 4)
     finalize_run_meta(run_dir, meta, metrics)
     append_leaderboard({

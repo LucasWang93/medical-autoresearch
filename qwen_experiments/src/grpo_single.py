@@ -282,7 +282,7 @@ def main():
 
     delta = ""
     ref = REFERENCE_BEST.get(args.task, {})
-    if best_primary > -math.inf and "gru_baseline" in ref:
+    if best_primary > -math.inf and ref.get("gru_baseline") is not None:
         delta = round(best_primary - ref["gru_baseline"], 4)
 
     append_leaderboard({

@@ -147,7 +147,7 @@ def primary_metric_name(task: str) -> str:
         "mimic4_mortality": "auroc",
         "mimic4_readmission": "auroc",
         "mimic4_los": "f1_macro",
-        "mimic4_phenotyping": "auroc_macro",
+        "mimic4_phenotyping": "f1_samples",
         "mimic4_drugrec": "jaccard_samples",
     }[task]
 
@@ -156,6 +156,6 @@ REFERENCE_BEST = {
     "mimic4_mortality": {"metric": "auroc", "gru_baseline": 0.9611, "gru_best": 0.9726, "multitask_best": 0.9755},
     "mimic4_readmission": {"metric": "auroc", "gru_baseline": 0.6688, "gru_best": 0.6981, "multitask_best": 0.7117},
     "mimic4_los": {"metric": "f1_macro", "gru_baseline": 0.4814, "gru_best": 0.5406, "multitask_best": 0.5548},
-    "mimic4_phenotyping": {"metric": "auroc_macro", "gru_baseline": 0.8165, "gru_best": 0.8333, "multitask_best": 0.8264},
+    "mimic4_phenotyping": {"metric": "f1_samples", "gru_baseline": None, "gru_best": None, "multitask_best": None},
     "mimic4_drugrec": {"metric": "jaccard_samples", "gru_baseline": 0.1661, "gru_best": 0.2052, "multitask_best": None},
 }

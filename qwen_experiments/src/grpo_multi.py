@@ -322,7 +322,8 @@ def main():
     })
     for t, v in best_per_task.items():
         ref = REFERENCE_BEST.get(t, {})
-        delta = round(v - ref.get("gru_baseline", v), 4) if ref else ""
+        base = ref.get("gru_baseline") if ref else None
+        delta = round(v - base, 4) if base is not None else ""
         append_leaderboard({
             "timestamp": meta["start_time"],
             "run_id": run_dir.name,
