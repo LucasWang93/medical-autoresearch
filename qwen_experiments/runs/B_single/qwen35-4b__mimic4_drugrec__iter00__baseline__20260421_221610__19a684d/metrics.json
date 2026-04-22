@@ -1,0 +1,21 @@
+{
+  "best_val": {
+    "n": 100,
+    "n_parseable": 0,
+    "parse_rate": 0.0,
+    "jaccard_samples": 0.18,
+    "f1_samples": 0.18,
+    "mean_reward": 0.0,
+    "step": 50,
+    "eval_secs": 223.3
+  },
+  "best_primary": 0.18,
+  "train_steps": 200,
+  "final_gpu_usage": [
+    {
+      "gpu": 0,
+      "allocated_gib": 9.13,
+      "reserved_gib": 71.95
+    }
+  ]
+}

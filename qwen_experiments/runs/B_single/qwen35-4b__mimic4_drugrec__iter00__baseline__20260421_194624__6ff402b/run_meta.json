@@ -1,0 +1,66 @@
+{
+  "track": "B_single",
+  "run_id": "qwen35-4b__mimic4_drugrec__iter00__baseline__20260421_194624__6ff402b",
+  "model_path": "/nfs/roberts/project/pi_yz875/sw2572/models/Qwen3.5-4B",
+  "model_tag": "qwen35-4b",
+  "task": "mimic4_drugrec",
+  "shots": null,
+  "iter": 0,
+  "seed": 42,
+  "git_sha": "6ff402b",
+  "job_id": "9139357",
+  "host": "a1124u02n01.mghpcc.ycrc.yale.edu",
+  "cuda_visible_devices": "0",
+  "partition": "gpu_h200",
+  "argv": [
+    "/nfs/roberts/project/pi_yz875/sw2572/codes/auto-research-health/medical-autoresearch/qwen_experiments/src/grpo_single.py",
+    "--model-tag",
+    "qwen35-4b",
+    "--task",
+    "mimic4_drugrec",
+    "--iter-idx",
+    "0",
+    "--extra-tag",
+    "baseline"
+  ],
+  "args": {
+    "model_tag": "qwen35-4b",
+    "task": "mimic4_drugrec",
+    "iter_idx": 0,
+    "extra_tag": "baseline",
+    "group_size": 8,
+    "temperature": 0.9,
+    "kl_beta": 0.04,
+    "max_new_tokens": 64,
+    "total_steps": 200,
+    "prompts_per_step": 2,
+    "learning_rate": 1e-05,
+    "warmup_steps": 10,
+    "max_grad_norm": 1.0,
+    "eval_every": 50,
+    "eval_n": 100,
+    "lora_r": 32,
+    "lora_alpha": 64,
+    "lora_dropout": 0.05,
+    "max_mem_gib_per_gpu": 0,
+    "max_visits": 10,
+    "max_codes_per_visit": 20,
+    "seed": 42
+  },
+  "notes": "",
+  "start_time": "2026-04-21T19:46:24",
+  "end_time": "2026-04-21T20:57:45",
+  "duration_s": 4281,
+  "metrics": {
+    "best_val": {},
+    "best_primary": null,
+    "train_steps": 200,
+    "final_gpu_usage": [
+      {
+        "gpu": 0,
+        "allocated_gib": 9.03,
+        "reserved_gib": 67.28
+      }
+    ]
+  }
+}

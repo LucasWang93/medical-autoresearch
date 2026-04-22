@@ -1,0 +1,23 @@
+{
+  "best_val": {
+    "n": 100,
+    "n_parseable": 16,
+    "parse_rate": 0.16,
+    "accuracy": 0.85,
+    "f1": 0.11764705882352941,
+    "auroc": 0.9242424242424243,
+    "auprc": 0.0625,
+    "mean_reward": 0.018000000000000002,
+    "step": 100,
+    "eval_secs": 232.4
+  },
+  "best_primary": 0.9242424242424243,
+  "train_steps": 200,
+  "final_gpu_usage": [
+    {
+      "gpu": 0,
+      "allocated_gib": 9.16,
+      "reserved_gib": 50.82
+    }
+  ]
+}

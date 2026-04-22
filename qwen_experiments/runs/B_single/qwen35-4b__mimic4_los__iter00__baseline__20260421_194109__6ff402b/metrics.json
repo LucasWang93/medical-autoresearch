@@ -1,0 +1,12 @@
+{
+  "best_val": {},
+  "best_primary": null,
+  "train_steps": 200,
+  "final_gpu_usage": [
+    {
+      "gpu": 0,
+      "allocated_gib": 8.64,
+      "reserved_gib": 10.95
+    }
+  ]
+}
