@@ -65,6 +65,8 @@ class UCBTaskBandit:
     def select(self) -> str:
         for t in self.tasks:
             if self.counts[t] == 0:
+                self.counts[t] += 1
+                self.total += 1
                 return t
         best_t, best_s = None, -math.inf
         for t in self.tasks:
@@ -73,6 +75,8 @@ class UCBTaskBandit:
             s = avg + bonus
             if s > best_s:
                 best_s, best_t = s, t
+        self.counts[best_t] += 1
+        self.total += 1
         return best_t
 
     def update_after_eval(self, task: str, primary: float) -> None:
@@ -81,10 +85,8 @@ class UCBTaskBandit:
         # EMA-smoothed delta as reward
         r = self.rewards[task] / max(1, self.counts[task])
         new_r = (1 - self.ema_alpha) * r + self.ema_alpha * delta
-        self.counts[task] += 1
-        self.rewards[task] = new_r * self.counts[task]  # restore counts-aligned sum
+        self.rewards[task] = new_r * self.counts[task]  # keep counts-aligned sum
         self.last_primary[task] = primary
-        self.total += 1
 
 
 def parse_args():
