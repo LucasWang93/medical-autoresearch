@@ -219,10 +219,48 @@ def parse_binary(text: str) -> Optional[int]:
 
 
 def parse_los(text: str) -> Optional[int]:
-    t = text.strip().lower().replace(" ", "")
+    """Parse LOS output into bucket index 0..3.
+
+    Recognizes both the exact literal options ('<3d', '3-7d', '7-14d', '>14d')
+    and common natural-language variants the model emits when not following
+    the format strictly. Order matters: we try the most specific matches
+    first (the literal buckets), then prose fallbacks with day-count
+    extraction, so that "less than 3 days" maps to bucket 0 rather than
+    being ambiguous.
+    """
+    t = text.strip().lower()
+    # Strip whitespace for literal matching.
+    t_ns = t.replace(" ", "").replace("_", "")
     for i, opt in enumerate(LOS_OPTIONS):
-        if opt.lower().replace(" ", "") in t:
+        if opt.lower().replace(" ", "") in t_ns:
             return i
+
+    # Prose fallbacks (bucket-specific keywords).
+    if re.search(r"\b(less than 3|under 3|fewer than 3|<\s*3|short stay|0-3|0 to 3)\b", t):
+        return 0
+    if re.search(r"\b(3\s*-\s*7|3 to 7|three to seven|four to seven|3to7|under one week)\b", t):
+        return 1
+    if re.search(r"\b(7\s*-\s*14|7 to 14|seven to fourteen|one to two weeks|1-2 weeks|7to14)\b", t):
+        return 2
+    if re.search(r"\b(more than 14|over 14|greater than 14|>\s*14|long stay|extended stay|14\+|two weeks or more|multi-week)\b", t):
+        return 3
+
+    # Day-count extraction: if the output mentions a number of days, bucket it.
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*(?:day|d\b)", t)
+    if m:
+        lo, hi = float(m.group(1)), float(m.group(2))
+        mid = (lo + hi) / 2.0
+    else:
+        m = re.search(r"(\d+(?:\.\d+)?)\s*(?:day|d\b)", t)
+        mid = float(m.group(1)) if m else None
+    if mid is not None:
+        if mid < 3:
+            return 0
+        if mid < 7:
+            return 1
+        if mid < 14:
+            return 2
+        return 3
     return None
 
 

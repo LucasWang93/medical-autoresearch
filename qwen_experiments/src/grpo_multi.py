@@ -100,7 +100,7 @@ def parse_args():
     p.add_argument("--extra-tag", type=str, default="")
     # GRPO
     p.add_argument("--group-size", type=int, default=8)
-    p.add_argument("--temperature", type=float, default=1.0)
+    p.add_argument("--temperature", type=float, default=0.9)
     p.add_argument("--kl-beta", type=float, default=0.04)
     p.add_argument("--entropy-coef", type=float, default=0.005)
     p.add_argument("--max-new-tokens", type=int, default=64)
