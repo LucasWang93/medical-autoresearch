@@ -96,6 +96,28 @@ def per_token_logprob(
     return tok_logp
 
 
+def per_token_logprob_and_entropy(
+    model,
+    batch: Dict[str, torch.Tensor],
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Return (per-token log π, per-token entropy H(π)), both [B, L-1].
+
+    Used when the caller wants an entropy bonus in the loss to keep the
+    policy from collapsing to a deterministic constant output.
+    """
+    out = model(input_ids=batch["input_ids"],
+                attention_mask=batch["attention_mask"],
+                use_cache=False)
+    logits = out.logits[:, :-1, :]             # [B, L-1, V]
+    targets = batch["input_ids"][:, 1:]        # [B, L-1]
+    logp = F.log_softmax(logits.float(), dim=-1)
+    p = logp.exp()
+    tok_logp = logp.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
+    # H = -Σ p · log p across vocabulary axis
+    entropy = -(p * logp).sum(dim=-1)          # [B, L-1]
+    return tok_logp, entropy
+
+
 def response_logprob_sum(tok_logp: torch.Tensor, response_mask: torch.Tensor) -> torch.Tensor:
     """Sum log π over response tokens only. Returns [B]."""
     # response_mask is aligned with input_ids (length L); the per-token
@@ -110,9 +132,14 @@ def kl_k3(logp_theta_tok: torch.Tensor,
           response_mask: torch.Tensor) -> torch.Tensor:
     """k3 estimator: KL ≈ exp(r) - r - 1 where r = logp_ref - logp_theta.
     Low variance and always ≥ 0. Returns scalar (mean over response tokens).
+
+    Clamp r to [-5, 5] so the KL penalty saturates at a manageable value
+    (exp(5) ≈ 148). Iter 0 used ±20 and observed KL up to 44, at which
+    point the policy has drifted so far that the gradient contribution
+    is dominated by exp(r) noise from individual tokens.
     """
     mask = response_mask[:, 1:].float()
-    r = (logp_ref_tok - logp_theta_tok).clamp(-20, 20)
+    r = (logp_ref_tok - logp_theta_tok).clamp(-5, 5)
     kl = torch.exp(r) - r - 1.0
     denom = mask.sum().clamp_min(1.0)
     return (kl * mask).sum() / denom
@@ -144,6 +171,7 @@ def grpo_loss(
     pad_token_id: int,
     device: torch.device,
     kl_beta: float = 0.04,
+    entropy_coef: float = 0.0,
     max_total_len: int = 4096,
 ) -> Dict[str, torch.Tensor]:
     """Compute GRPO loss over a SINGLE prompt's G samples.
@@ -152,26 +180,38 @@ def grpo_loss(
     gradients — typically realized by disabling LoRA adapters on `model`
     and calling per_token_logprob with torch.no_grad(); see
     run_single_step.
+
+    When `entropy_coef > 0`, we subtract `entropy_coef · mean_entropy`
+    from the loss (i.e. reward high entropy) as an anti-collapse signal.
     """
     batch = build_response_batch(samples, pad_token_id, device, max_total_len)
-    logp_tok = per_token_logprob(model, batch)                      # with grad
+    if entropy_coef > 0:
+        logp_tok, entropy_tok = per_token_logprob_and_entropy(model, batch)
+    else:
+        logp_tok = per_token_logprob(model, batch)
+        entropy_tok = None
     with torch.no_grad():
         ref_logp_tok = ref_model_callable(batch)                    # no grad
 
-    # Sum log-prob over response tokens
     logp_sum = response_logprob_sum(logp_tok, batch["response_mask"])  # [B]
     advantages = grpo_group_advantages(samples).to(device)             # [B]
 
-    # policy gradient: maximize A · log π  →  minimize - mean(A · log π)
     pg_loss = -(advantages.detach() * logp_sum).mean()
-
     kl = kl_k3(logp_tok, ref_logp_tok, batch["response_mask"])
     loss = pg_loss + kl_beta * kl
+
+    mean_entropy = torch.tensor(0.0, device=device)
+    if entropy_tok is not None:
+        mask = batch["response_mask"][:, 1:].float()
+        denom = mask.sum().clamp_min(1.0)
+        mean_entropy = (entropy_tok * mask).sum() / denom
+        loss = loss - entropy_coef * mean_entropy
 
     stats = {
         "loss": loss.detach().float(),
         "pg_loss": pg_loss.detach().float(),
         "kl": kl.detach().float(),
+        "entropy": mean_entropy.detach().float(),
         "mean_reward": torch.tensor(
             sum(s.reward for s in samples) / len(samples),
             dtype=torch.float32,

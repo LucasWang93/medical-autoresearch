@@ -100,13 +100,14 @@ def parse_args():
     p.add_argument("--extra-tag", type=str, default="")
     # GRPO
     p.add_argument("--group-size", type=int, default=8)
-    p.add_argument("--temperature", type=float, default=0.9)
+    p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--kl-beta", type=float, default=0.04)
+    p.add_argument("--entropy-coef", type=float, default=0.005)
     p.add_argument("--max-new-tokens", type=int, default=64)
     # Training
     p.add_argument("--total-steps", type=int, default=400)
     p.add_argument("--prompts-per-step", type=int, default=2)
-    p.add_argument("--learning-rate", type=float, default=1e-5)
+    p.add_argument("--learning-rate", type=float, default=0.0)  # 0 = per-model default
     p.add_argument("--warmup-steps", type=int, default=20)
     p.add_argument("--max-grad-norm", type=float, default=1.0)
     p.add_argument("--eval-every", type=int, default=80)
@@ -141,6 +142,11 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
+
+    if args.learning_rate <= 0:
+        args.learning_rate = {"qwen35-4b": 5e-6, "qwen35-9b": 1e-6}.get(
+            args.model_tag, 5e-6
+        )
 
     tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
     for t in tasks:
@@ -235,7 +241,8 @@ def main():
 
             out = grpo_loss(
                 model, ref_fn, group, tokenizer.pad_token_id, device,
-                kl_beta=args.kl_beta, max_total_len=4096,
+                kl_beta=args.kl_beta, entropy_coef=args.entropy_coef,
+                max_total_len=4096,
             )
             w = weights.get(task, 1.0)
             ((w * out["loss"]) / args.prompts_per_step).backward()
