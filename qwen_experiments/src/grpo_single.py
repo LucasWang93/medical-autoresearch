@@ -65,13 +65,14 @@ def ref_logprob_fn(model):
 def _eval_quick(
     model, tokenizer, task, samples: List[TextSample],
     max_visits: int, max_codes_per_visit: int, max_new_tokens: int,
+    demos: Optional[List[TextSample]] = None,
 ) -> Dict[str, float]:
     device = first_cuda_device(model)
     preds, labels, probs, rewards = [], [], [], []
     pred_multihot, gold_multihot = [], []
     model.eval()
     for s in samples:
-        messages = build_chat_messages(s, [], max_visits, max_codes_per_visit)
+        messages = build_chat_messages(s, demos, max_visits, max_codes_per_visit)
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         enc = tokenizer(text, return_tensors="pt", add_special_tokens=False)
         input_ids = enc.input_ids.to(device)
@@ -135,6 +136,10 @@ def parse_args():
     p.add_argument("--max-mem-gib-per-gpu", type=int, default=0)
     p.add_argument("--max-visits", type=int, default=10)
     p.add_argument("--max-codes-per-visit", type=int, default=20)
+    # Few-shot demos (iter 3+): K training-split demos prepended to every
+    # prompt (both rollout and eval). Helpful for tasks where the base model
+    # fails to follow the answer format (LOS in particular).
+    p.add_argument("--demo-k", type=int, default=0)
     # Reproducibility
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
@@ -197,6 +202,14 @@ def main():
     best_metrics: Dict = {}
     primary = primary_metric_name(args.task)
 
+    # Fixed demo set, sampled once — kept identical across all prompts and
+    # eval so the demos effectively become part of the system prompt.
+    demos: List[TextSample] = []
+    if args.demo_k > 0:
+        demos = rng.sample(train_samples, min(args.demo_k, len(train_samples)))
+        now_log("demos_sampled", k=len(demos),
+                labels=[str(getattr(d, "label", "?"))[:40] for d in demos])
+
     model.train()
     step_start = time.time()
     for step in range(1, args.total_steps + 1):
@@ -204,7 +217,7 @@ def main():
         step_stats: List[Dict[str, float]] = []
         for _ in range(args.prompts_per_step):
             s = rng.choice(train_samples)
-            messages = build_chat_messages(s, [], args.max_visits, args.max_codes_per_visit)
+            messages = build_chat_messages(s, demos, args.max_visits, args.max_codes_per_visit)
             try:
                 prompt_ids, resp_list = sample_group(
                     model, tokenizer, messages, args.group_size,
@@ -262,6 +275,7 @@ def main():
                 model, tokenizer, args.task, val_samples,
                 args.max_visits, args.max_codes_per_visit,
                 max_new_tokens=args.max_new_tokens,
+                demos=demos,
             )
             m["step"] = step
             m["eval_secs"] = round(time.time() - t_eval, 1)

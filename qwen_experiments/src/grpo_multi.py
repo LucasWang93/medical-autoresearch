@@ -120,6 +120,9 @@ def parse_args():
     p.add_argument("--max-mem-gib-per-gpu", type=int, default=0)
     p.add_argument("--max-visits", type=int, default=10)
     p.add_argument("--max-codes-per-visit", type=int, default=20)
+    # Few-shot demos per task (iter 3+). Each task gets its own K demos
+    # sampled from its train split.
+    p.add_argument("--demo-k", type=int, default=0)
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -201,6 +204,16 @@ def main():
     best_combined = -math.inf
     best_per_task: Dict = {}
 
+    # Per-task few-shot demo pool (iter 3+).
+    task_demos: Dict[str, List[TextSample]] = {}
+    if args.demo_k > 0:
+        for t in tasks:
+            pool = train_splits[t]
+            task_demos[t] = rng.sample(pool, min(args.demo_k, len(pool)))
+        now_log("demos_sampled", k=args.demo_k, tasks=list(task_demos.keys()))
+    else:
+        task_demos = {t: [] for t in tasks}
+
     model.train()
     step_start = time.time()
     for step in range(1, args.total_steps + 1):
@@ -215,7 +228,8 @@ def main():
                 task = tasks[rr_idx % len(tasks)]
                 rr_idx += 1
             s = rng.choice(train_splits[task])
-            messages = build_chat_messages(s, [], args.max_visits, args.max_codes_per_visit)
+            messages = build_chat_messages(s, task_demos.get(task, []),
+                                           args.max_visits, args.max_codes_per_visit)
             try:
                 prompt_ids, resp_list = sample_group(
                     model, tokenizer, messages, args.group_size,
@@ -281,6 +295,7 @@ def main():
                     model, tokenizer, task, val_splits[task],
                     args.max_visits, args.max_codes_per_visit,
                     max_new_tokens=args.max_new_tokens,
+                    demos=task_demos.get(task, []),
                 )
                 m["eval_secs"] = round(time.time() - t_e, 1)
                 primary = primary_metric_name(task)
